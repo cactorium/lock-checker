@@ -15,13 +15,14 @@ all: my_plugin.so
 my_plugin.so: my_plugin.o
 	$(CXX) $(LDFLAGS) -shared -o $@ $<
 
-my_plugin.o : main.cc
+my_plugin.o : my_plugin.cc
 	$(CXX) $(CXXFLAGS) -fPIC -c -o $@ $<
 
 clean:
 	rm -f warn_unused.o warn_unused.so
 
-check: my_plugin.so main.cc
-	$(CXX) -fplugin=./my_plugin.so -c test.cc -o /dev/null
+check: my_plugin.so test.cc
+	#$(CXX) -fplugin=./my_plugin.so -c test.cc -o /dev/null -fdump-tree-gimple
+	$(CXX) -fplugin=./my_plugin.so -c test.cc -o /dev/null -fdump-tree-gimple
  
 .PHONY: all clean check

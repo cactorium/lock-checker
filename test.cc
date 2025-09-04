@@ -16,7 +16,47 @@ void foo(int i) {
     if (i == 2) {
         unlock(tmp);
         return;
+   } else {
+        if (i == 7) {
+            lock(tmp, 3);
+        } else {
+            unlock(tmp);
+        }
     }
 
     unlock(tmp);
 }
+
+void bar(void) {
+    int i = 7;
+    lock(tmp, delay);
+
+    do {
+        unlock(tmp);
+    } while(0);
+    unlock(tmp);
+}
+
+int foobar(int i) {
+    {
+        if (lock(tmp, delay) == 0) {
+            return -1;
+        }
+    }
+
+    if (i == 2) {
+        unlock(tmp);
+        return -2;
+   } else {
+        if (i == 7) {
+            lock(tmp, 3);
+        } else {
+            unlock(tmp);
+        }
+    }
+
+    unlock(tmp);
+    return -3;
+}
+
+
