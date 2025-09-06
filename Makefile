@@ -1,7 +1,4 @@
-# Flags for the C++ compiler: C++11 and all the warnings
-CXXFLAGS = -std=c++11 -Wall -fno-rtti
-# Workaround for an issue of -std=c++11 and the current GCC headers
-CXXFLAGS += -Wno-literal-suffix
+CXXFLAGS = -std=c++20 -Wall -fno-rtti
 
 # Determine the plugin-dir and add it to the flags
 PLUGINDIR=$(shell $(CXX) -print-file-name=plugin)

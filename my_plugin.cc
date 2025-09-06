@@ -1,4 +1,6 @@
+#include <optional>
 #include <unordered_map>
+#include <vector>
 
 #include "gcc-plugin.h"
 #include "plugin.h"
@@ -37,7 +39,7 @@ static const struct pass_data my_pass_data = {
 static tree follow_ssa(tree v) {
     while (v != NULL && TREE_CODE(v) == SSA_NAME) {
         auto* stmt = SSA_NAME_DEF_STMT(v);
-        if (gimple_code(stmt) == GIMPLE_ASSIGN) {
+        if (gimple_code(stmt) == GIMPLE_ASSIGN && gimple_assign_rhs_code(stmt) == SSA_NAME) {
             v = gimple_assign_rhs1(stmt);
         } else {
             return v;
@@ -47,6 +49,162 @@ static tree follow_ssa(tree v) {
     return v;
 }
 
+static tree follow_var_decl(tree v) {
+    if (v == nullptr) {
+        return nullptr;
+    }
+    if (TREE_CODE(v) == VAR_DECL) {
+        return v;
+    }
+    if (TREE_CODE(v) == SSA_NAME) {
+        auto* stmt = SSA_NAME_DEF_STMT(v);
+        if (gimple_code(stmt) == GIMPLE_ASSIGN && gimple_assign_rhs_code(stmt) == VAR_DECL) {
+            return gimple_assign_rhs1(stmt);
+        }
+    } 
+    return nullptr;
+}
+
+using possible_vals = std::optional<std::pair<std::vector<int64_t>, std::vector<int>>>;
+
+template <typename F> possible_vals merge_vals(possible_vals& a, possible_vals& b, F op) {
+    if (!a.has_value()) {
+        //fprintf(stderr, "merge_vals a empty\n");
+        return std::nullopt;
+    }
+    if (!b.has_value()) {
+        //fprintf(stderr, "merge_vals b empty\n");
+        return std::nullopt;
+    }
+    auto& [a_vals, a_list] = *a;
+    auto& [b_vals, b_list] = *b;
+    if (a_vals.size() != (size_t)(1 << a_list.size())) {
+        fprintf(stderr, "ERROR: possibility list has the wrong size");
+        return std::nullopt;
+    }
+    if (b_vals.size() != (size_t)(1 << b_list.size())) {
+        fprintf(stderr, "ERROR: possibility list has the wrong size");
+        return std::nullopt;
+    }
+
+    std::vector<int> merged_list(a_list);
+    std::vector<int> b_idx_map;
+    for (auto &b_l: b_list) {
+        bool found = false;
+        for (size_t idx = 0; idx < merged_list.size(); idx++) {
+            if (b_l == merged_list[idx]) {
+                b_idx_map.push_back(idx);
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            merged_list.push_back(b_l);
+            b_idx_map.push_back(b_list.size() - 1);
+        }
+    }
+    std::vector<int64_t> merged_vals((1 << merged_list.size()), 0);
+    //fprintf(stderr, "a sz %d b sz %d merge_vals sz %d\n", a_vals.size(), b_vals.size(), merged_vals.size());
+    const int a_mask = (1 << a_list.size()) - 1;
+    for (size_t i = 0; i < merged_vals.size(); i++) {
+        int a_idx = i & a_mask;
+        int b_idx = 0;
+        for (size_t j = 0; j < b_list.size(); j++) {
+            int bit = 1 << b_idx_map[j];
+            if ((i & bit) != 0) {
+                b_idx |= (1 << j);
+            }
+        }
+        merged_vals[i] = op(a_vals[a_idx], b_vals[b_idx]);
+    }
+
+    return std::pair<std::vector<int64_t>, std::vector<int>> {
+        merged_vals,
+        merged_list
+    };
+}
+
+// attempts to calculate the possible results for a expression, assuming the expression
+// consists only of constants and references to lock calls
+// returns nullopt if there is anything else in the expression
+static std::optional<std::pair<std::vector<int64_t>, std::vector<int>>> calc_vals(tree v, const std::unordered_map<gimple*, int>& lock_calls) {
+    std::vector<int64_t> results;
+    fprintf(stderr, "calc vals %p\n", v);
+
+    // i'm pretty sure by this pass everything's been lowered to gimple,
+    // so it should only be ssa assignments
+    tree base = follow_ssa(v);
+    if (TREE_CODE(v) == SSA_NAME) {
+        auto* stmt = SSA_NAME_DEF_STMT(v);
+        if (auto it = lock_calls.find(stmt); it != lock_calls.end()) {
+            fprintf(stderr, "found lock\n");
+            // we found it
+            return std::pair<std::vector<int64_t>, std::vector<int>>{
+                std::vector<int64_t>{0, 1}, // pdFAIL, pdPASS
+                std::vector<int>{it->second}
+            };
+        }
+        if (gimple_code(stmt) == GIMPLE_ASSIGN) {
+            auto assign = as_a<gassign*>(stmt);
+            // TODO deal with EQ, NE, ADD, SUB, INTEGER_CST
+            auto subcode = gimple_assign_rhs_code(stmt);
+            if (subcode == INTEGER_CST) {
+                fprintf(stderr, "found const\n");
+                return std::pair<std::vector<int64_t>, std::vector<int>>{
+                    std::vector<int64_t>{tree_to_shwi(gimple_assign_rhs1(stmt))},
+                    std::vector<int>{}
+                };
+            } else if (subcode == PLUS_EXPR) {
+                fprintf(stderr, "+ merging %p %p\n", gimple_assign_rhs1(stmt), gimple_assign_rhs2(stmt));
+                auto left = calc_vals(gimple_assign_rhs1(stmt), lock_calls);
+                auto right = calc_vals(gimple_assign_rhs2(stmt), lock_calls); 
+                return merge_vals(left, right, [](int64_t a, int64_t b) {
+                           return a + b;
+                           });
+            } else if (subcode == MINUS_EXPR) {
+                fprintf(stderr, "- merging %p %p\n", gimple_assign_rhs1(stmt), gimple_assign_rhs2(stmt));
+                auto left = calc_vals(gimple_assign_rhs1(stmt), lock_calls);
+                auto right = calc_vals(gimple_assign_rhs2(stmt), lock_calls); 
+                return merge_vals(left, right, [](int64_t a, int64_t b) {
+                           return a + b;
+                           });
+            } else if (subcode == EQ_EXPR) {
+                fprintf(stderr, "eq merging %p %p\n", gimple_assign_rhs1(stmt), gimple_assign_rhs2(stmt));
+                auto left = calc_vals(gimple_assign_rhs1(stmt), lock_calls);
+                auto right = calc_vals(gimple_assign_rhs2(stmt), lock_calls); 
+                return merge_vals(left, right, [](int64_t a, int64_t b) {
+                           return a == b;
+                           });
+            } else if (subcode == NE_EXPR) {
+                fprintf(stderr, "ne merging %p %p\n", gimple_assign_rhs1(stmt), gimple_assign_rhs2(stmt));
+                auto left = calc_vals(gimple_assign_rhs1(stmt), lock_calls);
+                auto right = calc_vals(gimple_assign_rhs2(stmt), lock_calls); 
+                return merge_vals(left, right, [](int64_t a, int64_t b) {
+                           return a != b;
+                           });
+            } else if (subcode == SSA_NAME) {
+                fprintf(stderr, "found ssa\n");
+                return calc_vals(gimple_assign_rhs1(stmt), lock_calls);
+            } else if (subcode == VAR_DECL) {
+                return std::nullopt;
+            } else {
+                fprintf(stderr, "W: UNKNOWN subcode in calc_vals %d for %p\n", subcode, v);
+            }
+        } else {
+            fprintf(stderr, "W: UNEXPECTED gimple code %d\n", gimple_code(stmt));
+        }
+        return std::nullopt;
+    } else if (TREE_CODE(v) == INTEGER_CST) {
+            fprintf(stderr, "found const\n");
+            return std::pair<std::vector<int64_t>, std::vector<int>>{
+                std::vector<int64_t>{tree_to_shwi(v)},
+                std::vector<int>{}
+            };
+    } else {
+        fprintf(stderr, "W: UNKNOWN tree code in calc_vals %d for %p\n", TREE_CODE(v), v);
+    }
+    return std::nullopt;
+}
 struct my_custom_pass: public gimple_opt_pass {
 public:
     my_custom_pass(gcc::context* ctx): gimple_opt_pass(my_pass_data, ctx) {}
@@ -54,6 +212,8 @@ public:
     virtual unsigned int execute(function* f) override {
         warning(0, "in function %s", IDENTIFIER_POINTER(DECL_NAME(f->decl)));
         std::unordered_map<gimple*, int> lock_idx;
+        std::unordered_map<tree, int> lock_decl_idx;
+        int num_locks = 0;
 
         basic_block bb;
         int c = 0;
@@ -82,38 +242,61 @@ public:
                             if (strcmp(name, "lock") == 0) {
                                 fprintf(stderr, "\tfound lock!\n");
                                 fprintf(stderr, "lock statement %p\n", stmt);
-                                auto lhs = gimple_call_lhs(stmt);
-                                if (lhs != nullptr) {
-                                    //fprintf(stderr, "\t\tlhs %d %d\n", TREE_CODE(lhs), TREE_CODE_CLASS(TREE_CODE(lhs)));
-                                    //fprintf(stderr, "\t\t%d %d %d\n", IDENTIFIER_NODE, SSA_NAME, PLACEHOLDER_EXPR);
-                                }
-                                if (gimple_call_num_args(stmt) > 0) {
+
+                                if (gimple_call_num_args(stmt) >= 1) {
                                     auto rhs = gimple_call_arg(stmt, 0);
-                                    auto real_rhs = follow_ssa(rhs);
+                                    auto real_rhs = follow_var_decl(follow_ssa(rhs));
                                     if (real_rhs != nullptr) {
                                         fprintf(stderr, "\t\trhs %d %p\n", TREE_CODE(real_rhs), real_rhs);
                                         if (TREE_CODE(real_rhs) == VAR_DECL) {
                                             fprintf(stderr, "\t\trhs decl %s\n", IDENTIFIER_POINTER(DECL_NAME(real_rhs)));
                                         }
                                         //fprintf(stderr, "\t\t%d %d %d\n", IDENTIFIER_NODE, SSA_NAME, PLACEHOLDER_EXPR);
-
+                                        auto decl_id = DECL_NAME(real_rhs);
+                                        if (auto it = lock_decl_idx.find(decl_id); it == lock_decl_idx.end()) {
+                                            fprintf(stderr, "\t\tfound new lock for %p, decl_id %d\n", decl_id, num_locks);
+                                            lock_idx[stmt] = num_locks;
+                                            lock_decl_idx[decl_id] = num_locks;
+                                            num_locks++;
+                                        }
                                     }
-                                        //fprintf(stderr, "\t\t%p\n", rhs);
-                                } else {
-                                        //fprintf(stderr, "\t\tno args\n");
                                 }
-
+                            } else if (strcmp(name, "unlock") == 0) {
+                                fprintf(stderr, "\tfound unlock! %p\n", stmt);
+                                if (gimple_call_num_args(stmt) >= 1) {
+                                    auto rhs = gimple_call_arg(stmt, 0);
+                                    auto real_rhs = follow_var_decl(follow_ssa(rhs));
+                                    if (real_rhs != nullptr) {
+                                        fprintf(stderr, "\t\trhs %d %p\n", TREE_CODE(real_rhs), real_rhs);
+                                        if (TREE_CODE(real_rhs) == VAR_DECL) {
+                                            fprintf(stderr, "\t\trhs decl %s\n", IDENTIFIER_POINTER(DECL_NAME(real_rhs)));
+                                        }
+                                        //fprintf(stderr, "\t\t%d %d %d\n", IDENTIFIER_NODE, SSA_NAME, PLACEHOLDER_EXPR);
+                                        auto decl_id = DECL_NAME(real_rhs);
+                                        if (auto it = lock_decl_idx.find(decl_id); it != lock_decl_idx.end()) {
+                                            fprintf(stderr, "\t\tmatched with lock %d\n", it->second);
+                                        }
+                                    }
+                                }
                             }
                         }
-                        // TODO
                     }
                 }
-                if (false && gs->code == GIMPLE_ASSIGN) {
+                if (gs->code == GIMPLE_ASSIGN) {
                     auto* stmt = as_a<gassign*>(gs);
                     tree lhs = gimple_assign_lhs(stmt);
                     tree rhs = gimple_assign_rhs1(stmt);
                     tree rhs2 = gimple_assign_rhs2(stmt);
                     auto subcode = gimple_assign_rhs_code(gs);
+                    auto maybe_val = calc_vals(lhs, lock_idx);
+                    if (maybe_val) {
+                        auto &[vals, idxs] = *maybe_val;
+                        fprintf(stderr, "calculated vals [");
+                        for (auto& v: vals) {
+                            fprintf(stderr, "%lld ", v);
+                        }
+                        fprintf(stderr, "]\n");
+                    }
                     fprintf(stderr, "found statement subcode %d lhs %d rhs %d\n", subcode, TREE_CODE(lhs), TREE_CODE(rhs));
                     fprintf(stderr, "tree codes ssa_name %d var_decl %d int_cst %d\n", SSA_NAME, VAR_DECL, INTEGER_CST);
                     if (TREE_CODE(lhs) == SSA_NAME) {
