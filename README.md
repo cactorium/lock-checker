@@ -37,7 +37,7 @@ The overall idea is to do this:
         - Theoretically some combinations would be impossible, but that's very hard to determine
             - This is a pain to implement and I'm assuming most of the code I'm planning to use this on has like one or two semaphores
     - If there are function calls we don't recognize, we save the function name to finish evaluating when that function is analyzed
-        - Since we assume no function can change the state of the semaphores, we can continue checking a function without know exactly what a function does
+        - Since we assume no function can change the state of the semaphores, we can continue checking a function without know exactly what a function it calls does
             - We'd just miss deadlocks caused by the called function taking the same semaphore as the calling function, but those'd be caught when that function is analyzed and that part of the function is reanalyzed
 
 ## Current progress:
