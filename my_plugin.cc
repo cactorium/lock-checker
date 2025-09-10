@@ -1,6 +1,4 @@
-#include <optional>
 #include <unordered_map>
-#include <vector>
 
 #include "gcc-plugin.h"
 #include "plugin.h"
@@ -17,16 +15,13 @@
 #include "gimple-pretty-print.h"
 #include "tree-pretty-print.h"
 
+#include "func_walker.hh"
+
 // Define plugin information
 int plugin_is_GPL_compatible; // Set to 1 for GPL compatibility
 const char *plugin_version = "1.0";
 
-// A simple callback function
-static void my_callback(void *gcc_data, void *user_data) {
-    // This function will be called at a specific point during compilation
-    // You can add your custom logic here, e.g., print a message.
-    fprintf(stderr, "GCC Plugin: My callback was invoked!\n");
-}
+namespace lock_checker {
 
 static const struct pass_data my_pass_data = {
     .type = GIMPLE_PASS,
@@ -154,7 +149,6 @@ static std::optional<std::pair<std::vector<int64_t>, std::vector<int>>> calc_val
         }
         if (gimple_code(stmt) == GIMPLE_ASSIGN) {
             auto assign = as_a<gassign*>(stmt);
-            // TODO deal with EQ, NE, ADD, SUB, INTEGER_CST
             auto subcode = gimple_assign_rhs_code(stmt);
             if (subcode == INTEGER_CST) {
                 //fprintf(stderr, "found const\n");
@@ -213,26 +207,75 @@ static std::optional<std::pair<std::vector<int64_t>, std::vector<int>>> calc_val
     }
     return std::nullopt;
 }
-struct my_custom_pass: public gimple_opt_pass {
+
+static bool match_call(gcall* stmt, const char* fname, int nargs) {
+    tree fn = gimple_call_fn(stmt);
+    if (TREE_CODE(fn) == ADDR_EXPR) {
+        auto inner = TREE_OPERAND(fn, 0);
+        if (TREE_CODE(inner) == FUNCTION_DECL) {
+            const char* name = IDENTIFIER_POINTER(DECL_NAME(inner));
+            if (strcmp(name, fname) == 0) {
+                if (gimple_call_num_args(stmt) == nargs) {
+                    return true;
+                } else {
+                    fprintf(stderr, "W: found matching function call for %s with incorrect number of arguments\n");
+                }
+            }
+        }
+    }
+    return false;
+}
+
+enum class error {
+    kDoubleLock,
+    kGiveWithoutTakeFirst,
+    kTakeWithoutGive
+};
+
+struct GccAdapter {
+    using FuncHandler = tree;
+    using Location = location_t;
+};
+
+// two passes through all the basic blocks,
+// first to find all the locks in use and propagate the
+// lock state to each basic block, and then
+// second to generate the warnings at the right location
+// by replaying each block given its starting state
+struct function_checker {
+    std::unordered_map<tree, std::shared_ptr<lock_checker::func<GccAdapter>>> functions; // decl to 
+    std::unordered_map<tree, std::vector<tree>> used_byte;
+};
+// invariants to reinforce:
+// - output lock state must match input state
+// - don't take blocking semaphore twice in a row (deadlock)
+
+// assumptions:
+// - if it's not currently locked by this task, any nonblocking lock can fail due to an external task
+
+struct pass: public gimple_opt_pass {
 public:
-    my_custom_pass(gcc::context* ctx): gimple_opt_pass(my_pass_data, ctx) {}
+    pass(gcc::context* ctx): gimple_opt_pass(my_pass_data, ctx) {}
 
     virtual unsigned int execute(function* f) override {
         warning(0, "in function %s", IDENTIFIER_POINTER(DECL_NAME(f->decl)));
-        std::unordered_map<gimple*, int> lock_idx;
-        std::unordered_map<tree, int> lock_decl_idx;
+
+        std::unordered_map<gimple*, int> lock_idx; // lock idx
+        std::unordered_map<tree, int> lock_decl_idx; // declaration linked with a lock
         int num_locks = 0;
+        int num_calls = 0;
 
         basic_block bb;
-        int c = 0;
         FOR_ALL_BB_FN(bb, f) {
+            lock_checker::bb<GccAdapter> cur_bb = {};
+
             gimple_bb_info* bb_info = &bb->il.gimple;
             fprintf(stderr, "bb start %d\n", bb->index);
             //print_gimple_seq(stderr, bb_info->seq, 0, (dump_flags_t)0);
             gimple_stmt_iterator gsi;
             for (gsi = gsi_start(bb_info->seq); !gsi_end_p(gsi); gsi_next(&gsi)) {
                 gimple* gs = gsi_stmt(gsi);
-                fprintf(stderr, "\tstmt %p %d code %d\n\t", gs, c, gs->code);
+                //fprintf(stderr, "\tstmt %p %d code %d\n\t", gs, c, gs->code);
                 pretty_printer pp;
                 pp_needs_newline(&pp) = true;
                 pp.set_output_stream(stderr);
@@ -241,53 +284,45 @@ public:
 
                 if (gimple_code(gs) == GIMPLE_CALL) {
                     auto* stmt = as_a<gcall*>(gs);
-                    tree fn = gimple_call_fn(stmt);
-                    if (TREE_CODE(fn) == ADDR_EXPR) {
-                        auto inner = TREE_OPERAND(fn, 0);
-                        if (TREE_CODE(inner) == FUNCTION_DECL) {
-                            const char* name = IDENTIFIER_POINTER(DECL_NAME(inner));
-                            //fprintf(stderr, "\tfound name %s\n", name);
-                            if (strcmp(name, "lock") == 0) {
-                                fprintf(stderr, "\tfound lock! %p\n", stmt);
+                    if (match_call(stmt, "lock", 2)) {
+                        fprintf(stderr, "\tfound lock! %p\n", stmt);
 
-                                if (gimple_call_num_args(stmt) >= 1) {
-                                    auto rhs = gimple_call_arg(stmt, 0);
-                                    auto real_rhs = follow_var_decl(follow_ssa(rhs));
-                                    if (real_rhs != nullptr) {
-                                        //fprintf(stderr, "\t\trhs %d %p\n", TREE_CODE(real_rhs), real_rhs);
-                                        //if (TREE_CODE(real_rhs) == VAR_DECL) {
-                                            //fprintf(stderr, "\t\trhs decl %s\n", IDENTIFIER_POINTER(DECL_NAME(real_rhs)));
-                                        //}
-                                        //fprintf(stderr, "\t\t%d %d %d\n", IDENTIFIER_NODE, SSA_NAME, PLACEHOLDER_EXPR);
-                                        auto decl_id = DECL_NAME(real_rhs);
-                                        if (auto it = lock_decl_idx.find(decl_id); it == lock_decl_idx.end()) {
-                                            //fprintf(stderr, "\t\tfound new lock for %p, decl_id %d %s\n", decl_id, num_locks, IDENTIFIER_POINTER(real_rhs));
-                                            fprintf(stderr, "\t\tfound new lock for %p, decl_id %d\n", decl_id, num_locks);
-                                            lock_idx[stmt] = num_locks;
-                                            lock_decl_idx[decl_id] = num_locks;
-                                            num_locks++;
-                                        } else {
-                                            fprintf(stderr, "\t\tfound existing lock %d\n", it->second);
-                                        }
-                                    }
-                                }
-                            } else if (strcmp(name, "unlock") == 0) {
-                                fprintf(stderr, "\tfound unlock! %p\n", stmt);
-                                if (gimple_call_num_args(stmt) >= 1) {
-                                    auto rhs = gimple_call_arg(stmt, 0);
-                                    auto real_rhs = follow_var_decl(follow_ssa(rhs));
-                                    if (real_rhs != nullptr) {
-                                        //fprintf(stderr, "\t\trhs %d %p\n", TREE_CODE(real_rhs), real_rhs);
-                                        //if (TREE_CODE(real_rhs) == VAR_DECL) {
-                                            //fprintf(stderr, "\t\trhs decl %s\n", IDENTIFIER_POINTER(DECL_NAME(real_rhs)));
-                                        //}
-                                        //fprintf(stderr, "\t\t%d %d %d\n", IDENTIFIER_NODE, SSA_NAME, PLACEHOLDER_EXPR);
-                                        auto decl_id = DECL_NAME(real_rhs);
-                                        if (auto it = lock_decl_idx.find(decl_id); it != lock_decl_idx.end()) {
-                                            fprintf(stderr, "\t\tmatched with lock %d\n", it->second);
-                                        }
-                                    }
-                                }
+                        auto rhs = gimple_call_arg(stmt, 0);
+                        auto real_rhs = follow_var_decl(follow_ssa(rhs));
+
+                        if (real_rhs != nullptr) {
+                            auto decl_id = DECL_NAME(real_rhs);
+                            if (auto it = lock_decl_idx.find(decl_id); it == lock_decl_idx.end()) {
+                                fprintf(stderr, "\t\tfound new lock for %p, decl_id %d\n", decl_id, num_locks);
+                                lock_idx[stmt] = num_locks;
+                                lock_decl_idx[decl_id] = num_locks;
+                                num_locks++;
+                            } else {
+                                fprintf(stderr, "\t\tfound existing lock %d\n", it->second);
+                            }
+                        }
+
+                        int cur_lock = lock_idx[stmt];
+
+                        auto delay = gimple_call_arg(stmt, 1);
+                        auto delay_val = calc_vals(delay, lock_idx);
+                        if (!delay_val) {
+                            // TODO post warning
+                            // if we can't convert the delay to a constant you're doing something terribly wrong
+                        } else {
+                            auto &[delay_vals, delay_list] = *delay_val;
+                            if (delay_vals.size() > 1) {
+                                // TODO post warning
+                            } else {
+                            }
+                        }
+                    } else if (match_call(stmt, "unlock", 1)) {
+                        auto rhs = gimple_call_arg(stmt, 0);
+                        auto real_rhs = follow_var_decl(follow_ssa(rhs));
+                        if (real_rhs != nullptr) {
+                            auto decl_id = DECL_NAME(real_rhs);
+                            if (auto it = lock_decl_idx.find(decl_id); it != lock_decl_idx.end()) {
+                                fprintf(stderr, "\t\tmatched with lock %d\n", it->second);
                             }
                         }
                     }
@@ -295,13 +330,6 @@ public:
                 if (gs->code == GIMPLE_COND) {
                     fprintf(stderr, "\tfound cond\n");
                     gcond* stmt = as_a<gcond*>(gs);
-                    /*
-                    pretty_printer pp;
-                    pp_needs_newline(&pp) = true;
-                    pp.set_output_stream(stderr);
-                    pp_gimple_stmt_1(&pp, stmt, 0, TDF_RAW);
-                    pp_newline_and_flush(&pp);
-                    */
 
                     tree lhs = gimple_cond_lhs(stmt);
                     tree rhs = gimple_cond_rhs(stmt);
@@ -332,95 +360,7 @@ public:
                     } else {
                         fprintf(stderr, "\t\tUNKNOWN cond code %d\n", code);
                     }
-
-                    /*
-                    if (maybe_lhs || maybe_rhs) {
-                        if (maybe_lhs && maybe_rhs) {
-                            auto& [lval, lidx] = *maybe_lhs;
-                            auto& [rval, ridx] = *maybe_rhs;
-                            fprintf(stderr, "lhs ");
-                            dump_vals(lval);
-                            fprintf(stderr, "\n");
-                            fprintf(stderr, "rhs ");
-                            dump_vals(rval);
-                            fprintf(stderr, "\n");
-                        }
-                    }
-                    */
                 }
-                #if 0
-                if (gs->code == GIMPLE_ASSIGN) {
-                    auto* stmt = as_a<gassign*>(gs);
-                    tree lhs = gimple_assign_lhs(stmt);
-                    tree rhs = gimple_assign_rhs1(stmt);
-                    tree rhs2 = gimple_assign_rhs2(stmt);
-                    auto subcode = gimple_assign_rhs_code(gs);
-                    auto maybe_val = calc_vals(lhs, lock_idx);
-                    if (maybe_val) {
-                        auto &[vals, idxs] = *maybe_val;
-                        fprintf(stderr, "calculated vals ");
-                        dump_vals(vals);
-                        fprintf(stderr, "\n");
-                    }
-                    fprintf(stderr, "found statement subcode %d lhs %d rhs %d\n", subcode, TREE_CODE(lhs), TREE_CODE(rhs));
-                    fprintf(stderr, "tree codes ssa_name %d var_decl %d int_cst %d\n", SSA_NAME, VAR_DECL, INTEGER_CST);
-                    if (TREE_CODE(lhs) == SSA_NAME) {
-                        fprintf(stderr, "\t\tlhs points to %p\n", SSA_NAME_DEF_STMT(lhs));
-                    }
-                    if (TREE_CODE(rhs) == SSA_NAME) {
-                        fprintf(stderr, "\t\trhs points to %p\n", SSA_NAME_DEF_STMT(rhs));
-                    }
-                    if (subcode == INTEGER_CST) {
-                        fprintf(stderr, "\t\trhs %p is constant %llx\n", SSA_NAME_DEF_STMT(rhs), (long long int)tree_to_shwi(rhs));
-                    }
-                    if (subcode == VAR_DECL) {
-                        fprintf(stderr, "var decl %p\n", DECL_NAME(rhs));
-
-                        /*
-                        pretty_printer pp;
-                        pp_needs_newline(&pp) = true;
-                        pp.set_output_stream(stderr);
-                        print_declaration(&pp, rhs, 3, (dump_flags_t)0);
-                        pp_newline_and_flush(&pp);
-                        */
-                    }
-
-                    if (rhs2 != NULL && TREE_CODE(rhs2) == SSA_NAME) {
-                        fprintf(stderr, "\t\trhs2 points to %p\n", SSA_NAME_DEF_STMT(rhs2));
-                    }
-                }
-                /*
-                if (gs->code == GIMPLE_GOTO) {
-                    fprintf(stderr, "\tfound goto\n");
-                }
-                */
-                /*
-                if (gs->code == GIMPLE_RETURN) {
-                    fprintf(stderr, "\tfound return\n");
-                    auto* stmt = as_a<greturn*>(gs);
-                    if (stmt != NULL) {
-                        auto retval = gimple_return_retval(stmt);
-                        if (retval != NULL) {
-                            if (TREE_CODE(retval) == SSA_NAME) {
-                                //fprintf(stderr, "\t\tret points to %p\n", SSA_NAME_DEF_STMT(retval));
-                                pp_needs_newline(&pp) = true;
-                                pp.set_output_stream(stderr);
-                                pp_gimple_stmt_1(&pp, SSA_NAME_DEF_STMT(retval), 0, TDF_RAW);
-                                pp_newline_and_flush(&pp);
-                            }
-                        }
-                    } else {
-                        fprintf(stderr, "UNEXPECTED; GIMPLE_RETURN but not greturn\n");
-                    }
-                }
-                */
-
-                if (gs->code == GIMPLE_LABEL) {
-                    fprintf(stderr, "\tfound label\n");
-                }
-            #endif
-
-                c++;
             }
             edge e;
             edge_iterator ei;
@@ -429,19 +369,20 @@ public:
                 fprintf(stderr, "-> %d %04x\n", dest->index, e->flags);
             }
 
-    }
-
-        /*
-        gimple_stmt_iterator gsi;
-        for (gsi = gsi_start(f->gimple_body); !gsi_end_p(gsi); gsi_next(&gsi)) {
-            gimple* g = gsi_stmt(gsi);
-            fprintf(stderr, "test\n");
-            print_gimple_stmt(stderr, g, 0);
         }
-        */
         return 0;
     }
 };
+
+}
+
+// A simple callback function
+static void my_callback(void *gcc_data, void *user_data) {
+    // This function will be called at a specific point during compilation
+    // You can add your custom logic here, e.g., print a message.
+    fprintf(stderr, "GCC Plugin: My callback was invoked!\n");
+}
+
 
 // Plugin initialization function
 int plugin_init(plugin_name_args *plugin_info, plugin_gcc_version *version) {
@@ -451,7 +392,7 @@ int plugin_init(plugin_name_args *plugin_info, plugin_gcc_version *version) {
     }
 
     struct register_pass_info pass_info = {
-        .pass = new my_custom_pass(g),
+        .pass = new lock_checker::pass(g),
         .reference_pass_name = "nrv",
         .ref_pass_instance_number = 1,
         .pos_op = PASS_POS_INSERT_AFTER,
