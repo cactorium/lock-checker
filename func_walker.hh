@@ -44,9 +44,9 @@ template <typename T> struct action {
 };
 
 template <typename T> struct cond_edge {
-    std::optional<idx<fallible_lock>> depends_on; // index of the fallible lock call this depends on, else use the true edge
     idx<bb<T>> on_true;
     std::optional<idx<bb<T>>> on_false;
+    std::optional<idx<fallible_lock>> depends_on; // index of the fallible lock call this depends on, else use the true edge
 
     //cond_edge(): on_true() {}
 };
@@ -113,7 +113,7 @@ template <typename T> struct func {
                 // modify current possible states based on f
                 if (a.typ == action_type::kLock) {
                     for (auto &es: possible_states) {
-                        es.locked_by_task = false;
+                        es.locked_by_task = true;
                     }
                 } else if (a.typ == action_type::kFallibleLock) {
                     //assert(a.lock_id.has_val());
