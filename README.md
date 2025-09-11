@@ -47,3 +47,4 @@ The overall idea is to do this:
 - [ ] Convert the parsed gimple tree into data for each basic block
 - [ ] Analyze each function individually by running through the basic blocks
 - [ ] Extend to cover function calls to other functions defined in the same file
+- [ ] Refine to stage 2

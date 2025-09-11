@@ -16,12 +16,17 @@ struct errors {
 
 template <typename T> struct callsite {
     typename T::Location loc;
-    decltype(edge_state<T, int>{}.locked_by_task) lock_state;
+    using lock_state_type = decltype(edge_state<T, int>{}.locked_by_task);
+    lock_state_type lock_state;
+
+    bool operator==(const callsite<T>& other) const {
+        return (loc == other.loc) && (lock_state == other.lock_state);
+    }
 };
 
 template <typename T> struct file_checker {
     using FHandle = typename T::FuncHandler;
-    using Location = typename T::FuncHandler;
+    using Location = typename T::Location;
 
     std::unordered_map<FHandle, func<T>> functions;
     std::unordered_map<FHandle, bool> deadlock_with_lock; // if the function will deadlock if the lock is taken before it's called
@@ -45,15 +50,15 @@ template <typename T> struct file_checker {
                 if (!es.locked_by_task) {
                     // TODO add an error; unlock with a lock
                 }
-            } else if (a.type == kCall) {
-                if (a.called_func.get_val()) {
+            } else if (a.typ == kCall) {
+                if (a.called_func.has_value()) {
                     if (auto it = functions.find(*a.called_func); it != functions.end()) {
                         if (es.locked_by_task && deadlock_with_lock[*a.called_func]) {
                             // TODO add an error
                         }
                     } else {
                         if (es.locked_by_task) {
-                            unique_calls.add({name, es.locked_by_task});
+                            unique_calls.insert(callsite<T>{a.loc, es.locked_by_task});
                         }
                     }
                 }
@@ -82,8 +87,8 @@ template <typename T> struct file_checker {
 
 template <typename T> struct std::hash<lock_checker::callsite<T>> {
     std::size_t operator()(const lock_checker::callsite<T>& c) const {
-        std::size_t a = std::hash<T>(c.loc);
-        std::size_t b = std::hash<T>(c.lock_state);
+        std::size_t a = std::hash<typename T::Location>{}(c.loc);
+        std::size_t b = std::hash<typename lock_checker::callsite<T>::lock_state_type>{}(c.lock_state);
 
         return (a << 1) ^ b;
     }

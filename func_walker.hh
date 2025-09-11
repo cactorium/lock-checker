@@ -24,6 +24,13 @@ template <typename T> struct idx {
     int& operator*() {
         return idx_;
     }
+    const int& operator*() const {
+        return idx_;
+    }
+    
+    bool operator==(const idx<T>& other) const {
+        return idx_ == *other;
+    }
 };
 
 struct fallible_lock;
@@ -38,9 +45,9 @@ enum action_type {
 };
 template <typename T> struct action {
     action_type typ;
+    typename T::Location loc; // location in code to notify in case of error
     std::optional<idx<fallible_lock>> lock_id; // only used for fallible locks
     std::optional<typename T::FuncHandler> called_func; // pointer to the function declaration for calls
-    typename T::Location loc; // location in code to notify in case of error
 };
 
 template <typename T> struct cond_edge {
@@ -53,7 +60,7 @@ template <typename T> struct cond_edge {
 
 template <typename T> struct bb {
     std::vector<action<T>> actions; // actions to do to replay a basic_block
-    typename T::Location end; // where to alert if a semaphore isn't unlocked properly
+    typename T::Location loc; // where to alert if a semaphore isn't unlocked properly
     cond_edge<T> next;
 
     //bb(): end(), next() {}
@@ -87,20 +94,18 @@ template <typename T> struct func {
         while (!to_explore.empty()) {
             possible_states.clear();
 
-            auto e = to_explore.top();
+            auto e = to_explore.front();
             to_explore.pop();
 
             if (auto it = visited.find(e); it != visited.end()) {
                 continue;
             }
-            visited.add(e);
+            visited.insert(e);
 
             const auto &bb = bbs[*e.bb_idx];
 
             if (e.bb_idx == end_bb) {
-                f(e, bb, {
-                    action<T>::kEnd
-                });
+                f(e, bb, { kEnd });
                 continue;
             }
 
@@ -111,11 +116,11 @@ template <typename T> struct func {
                 }
 
                 // modify current possible states based on f
-                if (a.typ == action_type::kLock) {
+                if (a.typ == kLock) {
                     for (auto &es: possible_states) {
                         es.locked_by_task = true;
                     }
-                } else if (a.typ == action_type::kFallibleLock) {
+                } else if (a.typ == kFallibleLock) {
                     //assert(a.lock_id.has_val());
                     uint32_t mask = (1 << **a.lock_id);
 
@@ -135,27 +140,28 @@ template <typename T> struct func {
                             });
                         }
                     }
-                } else if (a.typ == action_type::kUnlock) {
+                } else if (a.typ == kUnlock) {
                     for (auto &es: possible_states) {
                         es.locked_by_task = false;
                     }
                 }
                 // NOTE: we ignore calls here; calls should not affect the lock state
+                // TODO add support for lock helper
             }
 
             // propagate to the next basic block
             for (auto& es: possible_states) {
-                if (bb.next.depends_on.has_val()) {
-                    idx<fallible_lock> i = bb.next.depends_on.get_val();
+                if (bb.next.depends_on.has_value()) {
+                    idx<fallible_lock> i = *bb.next.depends_on;
                     if (es.fallible_locks & (1 << *i)) {
-                        to_explore.push({es.fallible_locks, bb.next.on_true, es.lock_state, es.added});
+                        to_explore.push(edge_state<T, U>{es.fallible_locks, bb.next.on_true, es.locked_by_task, es.added});
                     } else {
-                        to_explore.push({es.fallible_locks, *bb.next.on_false, es.lock_state, es.added});
+                        to_explore.push(edge_state<T, U>{es.fallible_locks, *bb.next.on_false, es.locked_by_task, es.added});
                     }
                 } else {
-                    to_explore.push({es.fallible_locks, bb.next.on_true, es.lock_state, es.added});
-                    if (bb.next.on_false.has_val()) {
-                        to_explore.push({es.fallible_locks, *bb.next.on_false, es.lock_state, es.added});
+                    to_explore.push(edge_state<T, U>{es.fallible_locks, bb.next.on_true, es.locked_by_task, es.added});
+                    if (bb.next.on_false.has_value()) {
+                        to_explore.push(edge_state<T, U>{es.fallible_locks, *bb.next.on_false, es.locked_by_task, es.added});
                     }
                 }
             }
@@ -192,7 +198,10 @@ template <typename T> struct func {
 
 template<typename T, typename U> struct std::hash<lock_checker::edge_state<T, U>> {
     std::size_t operator()(const lock_checker::edge_state<T, U>& es) const {
-        // TODO
+        std::size_t a = std::hash<uint32_t>{}(es.fallible_locks);
+        std::size_t b = std::hash<int>{}(*es.bb_idx);
+        std::size_t c = std::hash<bool>{}(es.locked_by_task);
+        return a ^ (b << 1) ^ (c << 2);
     }
 };
 
