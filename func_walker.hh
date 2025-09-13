@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <cstdio>
 
 #include <optional>
 #include <queue>
@@ -150,7 +151,7 @@ template <typename T> struct cond_edge {
 
 template <typename T> struct bb {
     std::vector<action<T>> actions; // actions to do to replay a basic_block
-    typename T::Location loc; // where to alert if a semaphore isn't unlocked properly
+    //typename T::Location loc; // where to alert if a semaphore isn't unlocked properly
     cond_edge<T> next;
 
     //bb(): end(), next() {}
@@ -197,6 +198,7 @@ template <typename T> struct func {
             }
             visited.insert(e);
 
+            //fprintf(stderr, "accessing bb %d\n", *e.bb_idx);
             const auto &bb = bbs[*e.bb_idx];
 
             if (e.bb_idx == end_bb) {
@@ -253,15 +255,19 @@ template <typename T> struct func {
                     idx<fallible_lock> i = *bb.next.depends_on;
                     if ((es.fallible_locks & i.mask()) != 0) {
                         to_explore.push(edge_state<T, U>{es.fallible_locks, bb.next.on_true, es.cur_lock_state, es.added});
+                        //fprintf(stderr, "queued bb %d from %d\n", *bb.next.on_true, *e.bb_idx);
                     } else {
                         to_explore.push(edge_state<T, U>{es.fallible_locks, *bb.next.on_false, es.cur_lock_state, es.added});
+                        //fprintf(stderr, "queued bb %d from %d\n", **bb.next.on_false, *e.bb_idx);
                     }
                 } else {
                     // the conditional does not depend on a fallible lock call (as far as we can tell),
                     // continue on both branches
                     to_explore.push(edge_state<T, U>{es.fallible_locks, bb.next.on_true, es.cur_lock_state, es.added});
+                    //fprintf(stderr, "queued bb %d from %d\n", *bb.next.on_true, *e.bb_idx);
                     if (bb.next.on_false.has_value()) {
                         to_explore.push(edge_state<T, U>{es.fallible_locks, *bb.next.on_false, es.cur_lock_state, es.added});
+                        //fprintf(stderr, "queued bb %d from %d\n", **bb.next.on_false, *e.bb_idx);
                     }
                 }
             }

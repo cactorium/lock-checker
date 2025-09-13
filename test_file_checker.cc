@@ -37,7 +37,6 @@ TEST(test_file_checker, test_basic) {
         .bbs = {
             { // 0
                 .actions = {},
-                .loc = 0,
                 .next = {
                     {1},
                 }
@@ -46,7 +45,6 @@ TEST(test_file_checker, test_basic) {
                 .actions = {
                     a::lock_(0, ix{0}),
                 },
-                .loc=0,
                 .next = {
                     {2}, {3}
                 }
@@ -55,7 +53,6 @@ TEST(test_file_checker, test_basic) {
                 .actions = {
                     a::unlock_(2, ix{0}),
                 },
-                .loc=1,
                 .next = {
                     {4}
                 }
@@ -65,7 +62,6 @@ TEST(test_file_checker, test_basic) {
                     a::call_(3, std::string("f")),
                     a::unlock_(4, ix{0}),
                 },
-                .loc=3,
                 .next = {
                     {4}
                 }
@@ -75,7 +71,6 @@ TEST(test_file_checker, test_basic) {
                     a::lock_(5, ix{0}),
                     a::unlock_(6, ix{0}),
                 },
-                .loc=5,
                 .next = {
                     {5}
                 }
@@ -115,7 +110,6 @@ TEST(test_file_checker, test_basic_blocking_call) {
         .bbs = {
             { // 0
                 .actions = {},
-                .loc = 0,
                 .next = {
                     {1},
                 }
@@ -124,7 +118,6 @@ TEST(test_file_checker, test_basic_blocking_call) {
                 .actions = {
                     a::lock_(0, ix{0}),
                 },
-                .loc=0,
                 .next = {
                     {2}, {3}
                 }
@@ -133,7 +126,6 @@ TEST(test_file_checker, test_basic_blocking_call) {
                 .actions = {
                     a::unlock_(2, ix{0}),
                 },
-                .loc=1,
                 .next = {
                     {4}
                 }
@@ -143,7 +135,6 @@ TEST(test_file_checker, test_basic_blocking_call) {
                     a::call_(3, std::string("f")),
                     a::unlock_(4, ix{0}),
                 },
-                .loc=3,
                 .next = {
                     {4}
                 }
@@ -153,7 +144,6 @@ TEST(test_file_checker, test_basic_blocking_call) {
                     a::lock_(5, ix{0}),
                     a::unlock_(6, ix{0}),
                 },
-                .loc=5,
                 .next = {
                     {5}
                 }
@@ -174,7 +164,6 @@ TEST(test_file_checker, test_basic_blocking_call) {
         .bbs = {
             { // 0
                 .actions = {},
-                .loc = 0,
                 .next = {
                     {1},
                 }
@@ -184,7 +173,6 @@ TEST(test_file_checker, test_basic_blocking_call) {
                     a::lock_(1, ix{0}),
                     a::unlock_(1, ix{0}),
                 },
-                .loc=0,
                 .next = {
                     {2},
                 }
@@ -226,7 +214,6 @@ TEST(test_file_checker, test_basic_blocking_call2) {
         .bbs = {
             { // 0
                 .actions = {},
-                .loc = 0,
                 .next = {
                     {1},
                 }
@@ -235,7 +222,6 @@ TEST(test_file_checker, test_basic_blocking_call2) {
                 .actions = {
                     a::lock_(0, ix{0}),
                 },
-                .loc=0,
                 .next = {
                     {2}, {3}
                 }
@@ -244,7 +230,6 @@ TEST(test_file_checker, test_basic_blocking_call2) {
                 .actions = {
                     a::unlock_(2, ix{0}),
                 },
-                .loc=1,
                 .next = {
                     {4}
                 }
@@ -254,7 +239,6 @@ TEST(test_file_checker, test_basic_blocking_call2) {
                     a::call_(3, std::string("f")),
                     a::unlock_(4, ix{0}),
                 },
-                .loc=3,
                 .next = {
                     {4}
                 }
@@ -264,7 +248,6 @@ TEST(test_file_checker, test_basic_blocking_call2) {
                     a::lock_(5, ix{0}),
                     a::unlock_(6, ix{0}),
                 },
-                .loc=5,
                 .next = {
                     {5}
                 }
@@ -285,7 +268,6 @@ TEST(test_file_checker, test_basic_blocking_call2) {
         .bbs = {
             { // 0
                 .actions = {},
-                .loc = 0,
                 .next = {
                     {1},
                 }
@@ -295,7 +277,6 @@ TEST(test_file_checker, test_basic_blocking_call2) {
                     a::lock_(1, ix{0}),
                     a::unlock_(1, ix{0}),
                 },
-                .loc=0,
                 .next = {
                     {2},
                 }
@@ -339,7 +320,6 @@ TEST(test_file_checker, test_missing_give) {
         .bbs = {
             { // 0
                 .actions = {},
-                .loc = 0,
                 .next = {
                     {1},
                 }
@@ -348,7 +328,6 @@ TEST(test_file_checker, test_missing_give) {
                 .actions = {
                     a::lock_(0, ix{0}),
                 },
-                .loc=0,
                 .next = {
                     {2}, {3}
                 }
@@ -357,7 +336,6 @@ TEST(test_file_checker, test_missing_give) {
                 .actions = {
                     a::unlock_(2, ix{0}),
                 },
-                .loc=1,
                 .next = {
                     {4}
                 }
@@ -367,7 +345,6 @@ TEST(test_file_checker, test_missing_give) {
                     a::call_(3, std::string("f")),
                     //a::unlock_(4, ix{0}),
                 },
-                .loc=3,
                 .next = {
                     {4}
                 }
@@ -377,7 +354,6 @@ TEST(test_file_checker, test_missing_give) {
                     a::lock_(5, ix{0}),
                     a::unlock_(6, ix{0}),
                 },
-                .loc=5,
                 .next = {
                     {5}
                 }
@@ -418,7 +394,6 @@ TEST(test_file_checker, test_missing_give_return) {
         .bbs = {
             { // 0
                 .actions = {},
-                .loc = 0,
                 .next = {
                     {1},
                 }
@@ -427,7 +402,6 @@ TEST(test_file_checker, test_missing_give_return) {
                 .actions = {
                     a::lock_(0, ix{0}),
                 },
-                .loc=0,
                 .next = {
                     {2}, {3}
                 }
@@ -436,7 +410,6 @@ TEST(test_file_checker, test_missing_give_return) {
                 .actions = {
                     a::unlock_(2, ix{0}),
                 },
-                .loc=1,
                 .next = {
                     {4}
                 }
@@ -446,7 +419,6 @@ TEST(test_file_checker, test_missing_give_return) {
                     a::call_(3, std::string("f")),
                     a::unlock_(4, ix{0}),
                 },
-                .loc=3,
                 .next = {
                     {4}
                 }
@@ -456,7 +428,6 @@ TEST(test_file_checker, test_missing_give_return) {
                     a::lock_(5, ix{0}),
                     //a::unlock_(6, ix{0}),
                 },
-                .loc=5,
                 .next = {
                     {5}
                 }
@@ -498,7 +469,6 @@ TEST(test_file_checker, test_missing_take) {
         .bbs = {
             { // 0
                 .actions = {},
-                .loc = 0,
                 .next = {
                     {1},
                 }
@@ -507,7 +477,6 @@ TEST(test_file_checker, test_missing_take) {
                 .actions = {
                     //a::lock_(0, ix{0}),
                 },
-                .loc=0,
                 .next = {
                     {2}, {3}
                 }
@@ -516,7 +485,6 @@ TEST(test_file_checker, test_missing_take) {
                 .actions = {
                     a::unlock_(2, ix{0}),
                 },
-                .loc=1,
                 .next = {
                     {4}
                 }
@@ -526,7 +494,6 @@ TEST(test_file_checker, test_missing_take) {
                     a::call_(3, std::string("f")),
                     a::unlock_(4, ix{0}),
                 },
-                .loc=3,
                 .next = {
                     {4}
                 }
@@ -536,7 +503,6 @@ TEST(test_file_checker, test_missing_take) {
                     a::lock_(5, ix{0}),
                     //a::unlock_(6, ix{0}),
                 },
-                .loc=5,
                 .next = {
                     {5}
                 }
@@ -571,7 +537,6 @@ TEST(test_file_checker, test_multiple_funcs) {
         .bbs = {
             { // 0
                 .actions = {},
-                .loc = 0,
                 .next = {
                     {1},
                 }
@@ -582,7 +547,6 @@ TEST(test_file_checker, test_multiple_funcs) {
                     a::call_(1, "bar"),
                     a::unlock_(2, ix{0}),
                 },
-                .loc=0,
                 .next = {
                     {2}
                 }
@@ -601,7 +565,6 @@ TEST(test_file_checker, test_multiple_funcs) {
         .bbs = {
             { // 0
                 .actions = {},
-                .loc = 3,
                 .next = {
                     {1},
                 }
@@ -610,7 +573,6 @@ TEST(test_file_checker, test_multiple_funcs) {
                 .actions = {
                     a::call_(3, "baz"),
                 },
-                .loc=0,
                 .next = {
                     {2}
                 }
@@ -630,7 +592,6 @@ TEST(test_file_checker, test_multiple_funcs) {
         .bbs = {
             { // 0
                 .actions = {},
-                .loc = 4,
                 .next = {
                     {1},
                 }
@@ -640,7 +601,6 @@ TEST(test_file_checker, test_multiple_funcs) {
                     a::lock_(4, ix{0}),
                     a::unlock_(5, ix{0}),
                 },
-                .loc=4,
                 .next = {
                     {2}
                 }

@@ -81,7 +81,7 @@ template <typename T> struct file_checker {
         const auto &func_locks = functions.find(caller)->second.locks;
         lock_state<file_checker<T>> caller_state_translated = { 0 };
 
-        for (int i = 0; i < func_locks.size(); i++) {
+        for (size_t i = 0; i < func_locks.size(); i++) {
             if ((caller_state & (1 << i)) != 0) {
                 const auto lock_id = func_locks[i];
                 caller_state_translated = caller_state_translated | lock_idx.find(lock_id)->second.mask();

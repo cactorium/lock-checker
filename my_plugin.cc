@@ -236,7 +236,7 @@ static bool match_call(gcall* stmt, const char* fname, int nargs) {
         if (gimple_call_num_args(stmt) == nargs) {
             return true;
         } else {
-            fprintf(stderr, "W: found matching function call for %s with incorrect number of arguments\n");
+            fprintf(stderr, "W: found matching function call for %s with incorrect number of arguments\n", name);
         }
     }
     return false;
@@ -264,7 +264,14 @@ public:
 
         func<GccAdapter> fun = {};
 
+        int num_bbs = 0;
         basic_block bb;
+        FOR_ALL_BB_FN(bb, f) {
+            num_bbs++;
+        }
+
+        fun.bbs.resize(num_bbs);
+
         FOR_ALL_BB_FN(bb, f) {
 
             lock_checker::bb<GccAdapter> cur_bb = {};
@@ -315,7 +322,7 @@ public:
                         if (!delay_val) {
                             // TODO post warning
                             // if we can't convert the delay to a constant you're doing something terribly wrong
-                            fprintf(stderr, "\t\tunable to determine delay argument, skipping %p\n");
+                            fprintf(stderr, "\t\tunable to determine delay argument, skipping %p\n", stmt);
                             continue;
                         } else {
                             auto &[delay_vals, delay_list] = *delay_val;
@@ -368,6 +375,8 @@ public:
                             fprintf(stderr, "cond vals ");
                             dump_vals(result_vals);
                             fprintf(stderr, "\n");
+                        } else {
+                            fprintf(stderr, "branch unrelated to locks\n");
                         }
                     } else if (code == NE_EXPR) {
                         auto result = merge_vals(maybe_lhs, maybe_rhs, [](int64_t a, int64_t b) -> bool {
@@ -378,21 +387,45 @@ public:
                             fprintf(stderr, "cond vals ");
                             dump_vals(result_vals);
                             fprintf(stderr, "\n");
+                        } else {
+                            fprintf(stderr, "branch unrelated to locks\n");
                         }
                     } else {
                         fprintf(stderr, "\t\tUNKNOWN cond code %d\n", code);
+                        fprintf(stderr, "branch unrelated to locks\n");
                     }
                 }
             }
+
+            int edge_idx = 0;
             edge e;
             edge_iterator ei;
             FOR_EACH_EDGE(e, ei, bb->succs) {
                 basic_block dest = e->dest;
                 fprintf(stderr, "-> %d %04x\n", dest->index, e->flags);
+
+                if (e->flags & EDGE_FALLTHRU || e->flags & EDGE_TRUE_VALUE || e->flags == 0) {
+                    fprintf(stderr, "found true edge\n");
+                    cur_bb.next.on_true = dest->index;
+                } else if (e->flags & EDGE_FALSE_VALUE) {
+                    fprintf(stderr, "found false edge\n");
+                    cur_bb.next.on_false = dest->index;
+                } else {
+                    fprintf(stderr, "unknown edge type %04x", e->flags);
+                }
+                // TODO flip edges if it's a conditional and it's the inverse of what we're expecting
             }
 
-            fun.bbs.push_back(std::move(cur_bb));
+            fun.bbs[bb->index] = std::move(cur_bb);
         }
+        fun.start_bb = {ENTRY_BLOCK_PTR_FOR_FN(f)->index};
+        fun.end_bb = {EXIT_BLOCK_PTR_FOR_FN(f)->index};
+        fprintf(stderr, "fun has %d bbs entry %d exit %d\n", (int)fun.bbs.size(), *fun.start_bb, *fun.end_bb);
+
+        std::unordered_map<location_t, errors> fun_errors;
+
+        checker.process_function(f->decl, fun, fun_errors);
+
         return 0;
     }
 };
