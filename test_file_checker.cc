@@ -33,6 +33,7 @@ TEST(test_file_checker, test_basic) {
         //      lock(portMAX_DELAY); // 4
         //      unlock();
         // }
+        .locks = { 0 },
         .bbs = {
             { // 0
                 .actions = {},

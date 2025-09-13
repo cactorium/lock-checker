@@ -81,14 +81,14 @@ template <typename T> struct file_checker {
     std::unordered_map<FuncId, lock_state<file_checker<T>>> blocking_locks_used; // bitfield of all the locks that are taken using a blocking call in the function
     std::unordered_map<FuncId, std::vector<callsite<T>>> called_by;
 
-    lock_state<file_checker<T>> to_global(const lock_state<lock>& caller_state, FuncId caller) {
-        const auto &func_locks = functions[caller].locks;
+    lock_state<file_checker<T>> to_global(const lock_state<lock>& caller_state, FuncId caller) const {
+        const auto &func_locks = functions.find(caller)->second.locks;
         lock_state<file_checker<T>> caller_state_translated = { 0 };
 
         for (int i = 0; i < func_locks.size(); i++) {
             if ((caller_state & (1 << i)) != 0) {
                 const auto lock_id = func_locks[i];
-                caller_state_translated = caller_state_translated | lock_idx[lock_id].mask();
+                caller_state_translated = caller_state_translated | lock_idx.find(lock_id)->second.mask();
             }
         }
 
@@ -111,19 +111,23 @@ template <typename T> struct file_checker {
         std::vector<std::pair<callsite<T>, FuncId>> calls;
         lock_state<lock> blocking_locks = {};
 
-        fun.template explore<int>([&](edge_state<T, int>& es, const bb<T>& basic_block, const action<T>& a) {
-            if (a.typ == kLock) {
-                const auto &lock_id = fun.lookup_lock(*a.lock_id);
+        {
+            for (const auto& lock_id: fun.locks) {
                 // if we haven't seen this lock before, add it to the global list
-                if (auto it = lock_idx.find(lock_id); it != lock_idx.end()) {
+                if (auto it = lock_idx.find(lock_id); it == lock_idx.end()) {
                     lock_idx[lock_id] = {(int)locks.size()};
-                    locks.push_back(fun.locks[**a.lock_id]);
+                    locks.push_back(lock_id);
 
                     if (locks.size() > 32) {
                         // TODO error out
                     }
                 }
+            }
+        }
 
+
+        fun.template explore<int>([&](edge_state<T, int>& es, const bb<T>& basic_block, const action<T>& a) {
+            if (a.typ == kLock) {
                 blocking_locks = blocking_locks | a.lock_id->mask();
 
                 auto lock_mask = a.lock_id->mask();
@@ -159,10 +163,7 @@ template <typename T> struct file_checker {
             }
         }, 0);
 
-        // TODO: deal with transitive dependencies
-        {
-            blocking_locks_used[name] = to_global(blocking_locks, name);
-        }
+        blocking_locks_used[name] = to_global(blocking_locks, name);
 
         for (auto &call: calls) {
             auto [callsite, func_handle] = call;
