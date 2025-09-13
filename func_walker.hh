@@ -193,7 +193,7 @@ template <typename T> struct func {
             auto e = to_explore.front();
             to_explore.pop();
 
-            if (auto it = visited.find(e); it != visited.end()) {
+            if (visited.find(e) != visited.end()) {
                 continue;
             }
             visited.insert(e);
