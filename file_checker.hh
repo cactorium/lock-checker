@@ -56,72 +56,115 @@ struct errors {
 };
 
 template <typename T> struct callsite {
+    using lock_state_type = decltype(edge_state<T, int>{}.cur_lock_state);
+
     typename T::Location loc;
-    using lock_state_type = decltype(edge_state<T, int>{}.locked_by_task);
-    lock_state_type lock_state;
+    lock_state_type cur_lock_state;
+    typename T::FuncId caller;
 
     bool operator==(const callsite<T>& other) const {
-        return (loc == other.loc) && (lock_state == other.lock_state);
+        return (loc == other.loc) && (cur_lock_state == other.cur_lock_state) && (caller == other.caller);
     }
 };
 
 template <typename T> struct file_checker {
-    using FHandle = typename T::FuncHandler;
+    using FuncId = typename T::FuncId;
     using Location = typename T::Location;
+    using LockId = typename T::LockId;
 
-    std::unordered_map<FHandle, func<T>> functions;
-    std::unordered_map<FHandle, bool> deadlock_with_lock; // if the function will deadlock if the lock is taken before it's called
-    std::unordered_map<FHandle, std::vector<callsite<T>>> called_by;
+    // global list of lock ids and their position in 
+    // lock_state<file_checker<T>> objects
+    std::unordered_map<LockId, idx<file_checker<T>>> lock_idx;
+    std::vector<LockId> locks;
 
-    void process_function(FHandle name, func<T> && f, std::unordered_map<Location, errors>& line_errors) {
+    std::unordered_map<FuncId, func<T>> functions; // might not need this
+    std::unordered_map<FuncId, lock_state<file_checker<T>>> blocking_locks_used; // bitfield of all the locks that are taken using a blocking call in the function
+    std::unordered_map<FuncId, std::vector<callsite<T>>> called_by;
+
+    lock_state<file_checker<T>> to_global(const lock_state<lock>& caller_state, FuncId caller) {
+        const auto &func_locks = functions[caller].locks;
+        lock_state<file_checker<T>> caller_state_translated = { 0 };
+
+        for (int i = 0; i < func_locks.size(); i++) {
+            if ((caller_state & (1 << i)) != 0) {
+                const auto lock_id = func_locks[i];
+                caller_state_translated = caller_state_translated | lock_idx[lock_id].mask();
+            }
+        }
+
+        return caller_state_translated;
+    }
+
+    // TODO memoize?
+    void process_function(FuncId name, func<T> && f, std::unordered_map<Location, errors>& line_errors) {
         functions[name] = f;
         process_function_internal(name, line_errors);
     }
-    void process_function(FHandle name, const func<T> & f, std::unordered_map<Location, errors>& line_errors) {
+    void process_function(FuncId name, const func<T> & f, std::unordered_map<Location, errors>& line_errors) {
         functions[name] = f;
         process_function_internal(name, line_errors);
     }
 
-    void process_function_internal(FHandle name, std::unordered_map<Location, errors>& line_errors) {
-        func<T>& fun = functions[name];
-        bool uses_blocking_lock = false;
-        std::unordered_set<std::pair<callsite<T>, FHandle>> unique_calls;
+    void process_function_internal(FuncId name, std::unordered_map<Location, errors>& line_errors) {
+        const auto& fun = functions[name];
+
+        std::vector<std::pair<callsite<T>, FuncId>> calls;
+        lock_state<lock> blocking_locks = {};
 
         fun.template explore<int>([&](edge_state<T, int>& es, const bb<T>& basic_block, const action<T>& a) {
             if (a.typ == kLock) {
-                uses_blocking_lock = true;
-                if (es.locked_by_task) {
+                const auto &lock_id = fun.lookup_lock(*a.lock_id);
+                // if we haven't seen this lock before, add it to the global list
+                if (auto it = lock_idx.find(lock_id); it != lock_idx.end()) {
+                    lock_idx[lock_id] = {(int)locks.size()};
+                    locks.push_back(fun.locks[**a.lock_id]);
+
+                    if (locks.size() > 32) {
+                        // TODO error out
+                    }
+                }
+
+                blocking_locks = blocking_locks | a.lock_id->mask();
+
+                auto lock_mask = a.lock_id->mask();
+                if ((es.cur_lock_state & lock_mask) != 0) {
                     // double lock
                     line_errors[a.loc].add(errors::double_lock(""));
                 }
             } else if (a.typ == kUnlock) {
-                if (!es.locked_by_task) {
-                    // unlock with a lock
+                auto lock_mask = a.lock_id->mask();
+                if ((es.cur_lock_state & lock_mask) == 0) {
+                    // unlock without a lock
                     line_errors[a.loc].add(errors::give_without_take(""));
                 }
             } else if (a.typ == kCall) {
-                if (a.called_func.has_value()) {
-                    if (auto it = functions.find(*a.called_func); it != functions.end()) {
-                        if (es.locked_by_task && deadlock_with_lock[*a.called_func]) {
-                            // TODO add an error
-                            line_errors[a.loc].add(errors::call_with_blocking_lock(""));
-                        }
-                    } else {
-                        if (es.locked_by_task) {
-                            unique_calls.insert({callsite<T>{a.loc, es.locked_by_task}, *a.called_func});
-                        }
+                if (auto it = functions.find(*a.called_func); it != functions.end()) {
+                    auto translated = to_global(es.cur_lock_state, name);
+                    if ((translated & blocking_locks_used[*a.called_func]) != 0) {
+                        // TODO add an error
+                        line_errors[a.loc].add(errors::call_with_blocking_lock(""));
+                    }
+                } else {
+                    if (es.cur_lock_state != 0) {
+                        calls.push_back({callsite<T>{a.loc, es.cur_lock_state, name}, *a.called_func});
+
+                        // TODO: deal with transitive dependencies; 
                     }
                 }
             } else if (a.typ == kEnd) {
-                if (es.locked_by_task) {
+                if (es.cur_lock_state != 0) {
                     // lock held at the end of the function
                     line_errors[a.loc].add(errors::take_without_give(""));
                 }
             }
         }, 0);
 
-        deadlock_with_lock[name] = uses_blocking_lock;
-        for (auto &call: unique_calls) {
+        // TODO: deal with transitive dependencies
+        {
+            blocking_locks_used[name] = to_global(blocking_locks, name);
+        }
+
+        for (auto &call: calls) {
             auto [callsite, func_handle] = call;
             called_by[func_handle].push_back(callsite);
         }
@@ -130,12 +173,15 @@ template <typename T> struct file_checker {
         if (auto it = called_by.find(name); it != called_by.end()) {
             auto &calls = it->second;
             for (const auto& cs: calls) {
-                if (uses_blocking_lock && cs.lock_state) {
+                if ((to_global(cs.cur_lock_state, name) & blocking_locks_used[cs.caller]) != 0) {
                     // TODO: add an error
                     line_errors[cs.loc].add(errors::call_with_blocking_lock(""));
                 }
             }
-            called_by.erase(it);
+            //called_by.erase(it);
+
+            // TODO propagate up call chain; update the blocking locks used by
+            // all the callers
         }
     }
 };
@@ -145,9 +191,10 @@ template <typename T> struct file_checker {
 template <typename T, typename U> struct std::hash<std::pair<lock_checker::callsite<T>, U>> {
     std::size_t operator()(const std::pair<lock_checker::callsite<T>, U>& c) const {
         std::size_t a1 = std::hash<typename T::Location>{}(c.first.loc);
-        std::size_t a2 = std::hash<typename lock_checker::callsite<T>::lock_state_type>{}(c.first.lock_state);
-        std::size_t a3 = std::hash<U>{}(c.second);
+        std::size_t a2 = std::hash<typename lock_checker::callsite<T>::lock_state_type>{}(c.first.cur_lock_state);
+        std::size_t a3 = std::hash<typename T::FuncId>{}(c.first.fh);
+        std::size_t a4 = std::hash<U>{}(c.second);
 
-        return a1 ^ (a2 << 1) ^ (a3 << 1);
+        return a1 ^ (a2 << 1) ^ (a3 << 2) ^ (a4 << 3);
     }
 };

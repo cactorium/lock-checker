@@ -233,8 +233,9 @@ enum class error {
 };
 
 struct GccAdapter {
-    using FuncHandler = tree;
+    using FuncId = tree;
     using Location = location_t;
+    using LockId = tree;
 };
 
 // two passes through all the basic blocks,
@@ -264,6 +265,8 @@ public:
         std::unordered_map<tree, int> lock_decl_idx; // declaration linked with a lock
         int num_locks = 0;
         int num_calls = 0;
+
+        std::vector<lock_checker::bb<GccAdapter>> bbs;
 
         basic_block bb;
         FOR_ALL_BB_FN(bb, f) {

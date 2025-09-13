@@ -9,12 +9,53 @@
 
 // almost everything here is templated around a generic variable T, which needs to provide two types,
 // - a Location type for mapping a lock, unlock, or call to its location in code,
-// - and a FuncHandler type that provides a unique identifier for the function
+// - and a FuncId type that provides a unique identifier for the function
+// - and a LockId type that provides a unique identifier for the lock (which must be shared/used by all the locks in all the functions
 //
 // this is genericized so that unit testing can be done on this code without needing to use the representations
 // GCC provides; we can mock out gcc's tree and location_t for our own structs in testing
 
 namespace lock_checker {
+
+// everything is parametized around T, which must provide:
+// struct T {
+//      using Location = /* */;
+//      using FuncId = /* */;
+//      using LockId = /* */;
+// };
+
+template <typename T> struct lock_state {
+    uint32_t state;
+
+    lock_state<T> operator&(const lock_state<T>& other) const {
+        return {state & other.state};
+    }
+    lock_state<T> operator&(const uint32_t& other) const {
+        return {state & other};
+    }
+    lock_state<T> operator|(const lock_state<T>& other) const {
+        return {state | other.state};
+    }
+    lock_state<T> operator|(const uint32_t& other) const {
+        return {state | other};
+    }
+    bool operator==(const lock_state<T>& other) const {
+        return state == other.state;
+    }
+    bool operator==(const uint32_t& other) const {
+        return state == other;
+    }
+    bool operator!=(const lock_state<T>& other) const {
+        return state != other.state;
+    }
+    bool operator!=(const uint32_t& other) const {
+        return state != other;
+    }
+    lock_state<T> operator~() const {
+        return {~state};
+    }
+};
+
 
 template <typename T> struct idx {
     int idx_;
@@ -31,8 +72,14 @@ template <typename T> struct idx {
     bool operator==(const idx<T>& other) const {
         return idx_ == *other;
     }
+
+    // use to set/clear the corresponding bit in a lock_state<T> struct
+    lock_state<T> mask() const {
+        return { (uint32_t)(1 << idx_) };
+    }
 };
 
+struct lock;
 struct fallible_lock;
 template <typename T> struct bb;
 
@@ -44,10 +91,53 @@ enum action_type {
     kEnd // end of function reached
 };
 template <typename T> struct action {
+    using Loc = typename T::Location;
+    using FH = typename T::FuncId;
+
     action_type typ;
-    typename T::Location loc; // location in code to notify in case of error
-    std::optional<idx<fallible_lock>> lock_id; // only used for fallible locks
-    std::optional<typename T::FuncHandler> called_func; // pointer to the function declaration for calls
+    Loc loc; // location in code to notify in case of error
+    std::optional<idx<lock>> lock_id;
+    std::optional<idx<fallible_lock>> call_id; // only used for fallible locks
+    std::optional<FH> called_func; // pointer to the function declaration for calls
+
+protected:
+    action() = default;
+public:
+    static action<T> lock_(Loc loc, idx<lock> lock_id) {
+        return action<T>{
+            .typ = kLock,
+            .loc = loc,
+            .lock_id = lock_id
+        };
+    }
+    static action<T> fallible_lock_(Loc loc, idx<lock> lock_id, idx<fallible_lock> call_id) {
+        return action<T> {
+            .typ = kFallibleLock,
+            .loc = loc,
+            .lock_id = lock_id,
+            .call_id = call_id
+        };
+    }
+    static action<T> unlock_(Loc loc, idx<lock> lock_id) {
+        return action<T>{
+            .typ = kUnlock,
+            .loc = loc,
+            .lock_id = lock_id
+        };
+    }
+    static action<T> call_(Loc loc, FH func_handler) {
+        return action<T>{
+            .typ = kCall,
+            .loc = loc,
+            .called_func = func_handler
+        };
+    }
+    static action<T> end_(Loc loc) {
+        return action<T> {
+            .typ = kEnd,
+            .loc = loc
+        };
+    }
 };
 
 template <typename T> struct cond_edge {
@@ -67,21 +157,26 @@ template <typename T> struct bb {
 };
 
 template <typename T, typename U> struct edge_state {
-    uint32_t fallible_locks; // state of fallible lock calls up to this point
+    lock_state<fallible_lock> fallible_locks; // state of fallible lock calls up to this point
     idx<bb<T>> bb_idx;
-    bool locked_by_task;
+    lock_state<lock> cur_lock_state;
     U added; // any extra info that the caller wants to add to the state
 
     bool operator==(const edge_state<T, U>& other) const {
-        return (other.fallible_locks == fallible_locks) && (*other.bb_idx == *bb_idx) && (other.locked_by_task == locked_by_task);
+        return (other.fallible_locks == fallible_locks) && (*other.bb_idx == *bb_idx) && (other.cur_lock_state == cur_lock_state);
     }
 };
 
 template <typename T> struct func {
+    std::vector<typename T::LockId> locks; // need some kind of lock id to map between locks across calls
     std::vector<bb<T>> bbs;
     idx<bb<T>> start_bb, end_bb;
 
-    template <typename U, typename F> void explore(F f, U init_val, std::optional<edge_state<T, U>> start_state = std::nullopt) {
+    const typename T::LockId& lookup_lock(const idx<lock>& idx) const {
+        return locks[*idx];
+    }
+
+    template <typename U, typename F> void explore(F f, U init_val, std::optional<edge_state<T, U>> start_state = std::nullopt) const {
         std::queue<edge_state<T, U>> to_explore;
         std::unordered_set<edge_state<T, U>> visited;
         std::vector<edge_state<T, U>> possible_states;
@@ -89,7 +184,7 @@ template <typename T> struct func {
         if (start_state) {
             to_explore.push(*start_state);
         } else {
-            to_explore.push({0, start_bb, 0, init_val});
+            to_explore.push({{0}, start_bb, {0}, init_val});
         }
         while (!to_explore.empty()) {
             possible_states.clear();
@@ -117,14 +212,16 @@ template <typename T> struct func {
 
                 // modify current possible states based on f
                 if (a.typ == kLock) {
+                    auto lock_mask = (1 << **a.lock_id);
                     for (auto &es: possible_states) {
-                        es.locked_by_task = true;
+                        es.cur_lock_state = es.cur_lock_state | lock_mask;
                     }
                 } else if (a.typ == kFallibleLock) {
-                    //assert(a.lock_id.has_val());
-                    uint32_t mask = (1 << **a.lock_id);
+                    //assert(a.call_id.has_val());
+                    auto call_mask = a.call_id->mask();
+                    auto lock_mask = a.lock_id->mask();
 
-                    if (e.locked_by_task) {
+                    if ((e.cur_lock_state & lock_mask) != 0) {
                         // do nothing; the lock can only fail, which is the default state
                     } else {
                         // add the states where the lock was successfully taken
@@ -133,16 +230,17 @@ template <typename T> struct func {
                         int len = possible_states.size();
                         for (int i = 0; i < len; i++) {
                             possible_states.push_back({
-                                possible_states[i].fallible_locks | mask,
+                                possible_states[i].fallible_locks | call_mask,
                                 possible_states[i].bb_idx,
-                                true,
+                                e.cur_lock_state | lock_mask,
                                 possible_states[i].added
                             });
                         }
                     }
                 } else if (a.typ == kUnlock) {
+                    auto lock_mask = a.lock_id->mask();
                     for (auto &es: possible_states) {
-                        es.locked_by_task = false;
+                        es.cur_lock_state = es.cur_lock_state & ~lock_mask;
                     }
                 }
                 // NOTE: we ignore calls here; calls should not affect the lock state
@@ -153,44 +251,21 @@ template <typename T> struct func {
             for (auto& es: possible_states) {
                 if (bb.next.depends_on.has_value()) {
                     idx<fallible_lock> i = *bb.next.depends_on;
-                    if (es.fallible_locks & (1 << *i)) {
-                        to_explore.push(edge_state<T, U>{es.fallible_locks, bb.next.on_true, es.locked_by_task, es.added});
+                    if ((es.fallible_locks & i.mask()) != 0) {
+                        to_explore.push(edge_state<T, U>{es.fallible_locks, bb.next.on_true, es.cur_lock_state, es.added});
                     } else {
-                        to_explore.push(edge_state<T, U>{es.fallible_locks, *bb.next.on_false, es.locked_by_task, es.added});
+                        to_explore.push(edge_state<T, U>{es.fallible_locks, *bb.next.on_false, es.cur_lock_state, es.added});
                     }
                 } else {
-                    to_explore.push(edge_state<T, U>{es.fallible_locks, bb.next.on_true, es.locked_by_task, es.added});
+                    // the conditional does not depend on a fallible lock call (as far as we can tell),
+                    // continue on both branches
+                    to_explore.push(edge_state<T, U>{es.fallible_locks, bb.next.on_true, es.cur_lock_state, es.added});
                     if (bb.next.on_false.has_value()) {
-                        to_explore.push(edge_state<T, U>{es.fallible_locks, *bb.next.on_false, es.locked_by_task, es.added});
+                        to_explore.push(edge_state<T, U>{es.fallible_locks, *bb.next.on_false, es.cur_lock_state, es.added});
                     }
                 }
             }
         }
-    }
-
-    // this shortcuts having to re explore the function if it's called from somewhere else;
-    // if it always does blocking take we know it'll fail if the calling function has already taken the lock
-    std::optional<bool> saved_always_blocks;
-
-    bool always_blocks() {
-        if (saved_always_blocks.has_value()) {
-            return *saved_always_blocks;
-        }
-
-        bool a_b = true;
-        explore<bool>(false, [&](edge_state<T, bool>& es, const bb<T>& basic_block, const action<T>& a) {
-            if (a.typ == action_type::kLock) {
-                es.added = true;
-            }
-            if (a.typ == action_type::kEnd) {
-                if (!es.added) {
-                    a_b = false;
-                }
-            }
-        });
-
-        saved_always_blocks = a_b;
-        return a_b;
     }
 };
 
@@ -198,9 +273,9 @@ template <typename T> struct func {
 
 template<typename T, typename U> struct std::hash<lock_checker::edge_state<T, U>> {
     std::size_t operator()(const lock_checker::edge_state<T, U>& es) const {
-        std::size_t a = std::hash<uint32_t>{}(es.fallible_locks);
+        std::size_t a = std::hash<uint32_t>{}(es.fallible_locks.state);
         std::size_t b = std::hash<int>{}(*es.bb_idx);
-        std::size_t c = std::hash<bool>{}(es.locked_by_task);
+        std::size_t c = std::hash<uint32_t>{}(es.cur_lock_state.state);
         return a ^ (b << 1) ^ (c << 2);
     }
 };

@@ -33,3 +33,8 @@ target_link_libraries(test_file_checker
     GTest::gtest
     GTest::gtest_main
 )
+target_compile_options(test_file_checker PRIVATE
+    -g
+)
+
+
