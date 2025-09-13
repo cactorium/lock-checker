@@ -15,6 +15,7 @@
 #include "gimple-pretty-print.h"
 #include "tree-pretty-print.h"
 
+#include "file_checker.hh"
 #include "func_walker.hh"
 
 // Define plugin information
@@ -208,29 +209,38 @@ static std::optional<std::pair<std::vector<int64_t>, std::vector<int>>> calc_val
     return std::nullopt;
 }
 
-static bool match_call(gcall* stmt, const char* fname, int nargs) {
+tree call_decl(gcall* stmt) {
     tree fn = gimple_call_fn(stmt);
     if (TREE_CODE(fn) == ADDR_EXPR) {
         auto inner = TREE_OPERAND(fn, 0);
         if (TREE_CODE(inner) == FUNCTION_DECL) {
-            const char* name = IDENTIFIER_POINTER(DECL_NAME(inner));
-            if (strcmp(name, fname) == 0) {
-                if (gimple_call_num_args(stmt) == nargs) {
-                    return true;
-                } else {
-                    fprintf(stderr, "W: found matching function call for %s with incorrect number of arguments\n");
-                }
-            }
+            return DECL_NAME(inner);
+        }
+    }
+
+    return nullptr;
+
+}
+static bool match_call(gcall* stmt, const char* fname, int nargs) {
+    tree decl = call_decl(stmt);
+    if (decl == nullptr) {
+        return false;
+    }
+
+    const char* name = IDENTIFIER_POINTER(decl);
+    if (name == nullptr) {
+        return false;
+    }
+
+    if (strcmp(name, fname) == 0) {
+        if (gimple_call_num_args(stmt) == nargs) {
+            return true;
+        } else {
+            fprintf(stderr, "W: found matching function call for %s with incorrect number of arguments\n");
         }
     }
     return false;
 }
-
-enum class error {
-    kDoubleLock,
-    kGiveWithoutTakeFirst,
-    kTakeWithoutGive
-};
 
 struct GccAdapter {
     using FuncId = tree;
@@ -238,38 +248,25 @@ struct GccAdapter {
     using LockId = tree;
 };
 
-// two passes through all the basic blocks,
-// first to find all the locks in use and propagate the
-// lock state to each basic block, and then
-// second to generate the warnings at the right location
-// by replaying each block given its starting state
-struct function_checker {
-    std::unordered_map<tree, std::shared_ptr<lock_checker::func<GccAdapter>>> functions; // decl to 
-    std::unordered_map<tree, std::vector<tree>> used_byte;
-};
-// invariants to reinforce:
-// - output lock state must match input state
-// - don't take blocking semaphore twice in a row (deadlock)
-
-// assumptions:
-// - if it's not currently locked by this task, any nonblocking lock can fail due to an external task
-
 struct pass: public gimple_opt_pass {
 public:
     pass(gcc::context* ctx): gimple_opt_pass(my_pass_data, ctx) {}
 
+    file_checker<GccAdapter> checker;
+
     virtual unsigned int execute(function* f) override {
         warning(0, "in function %s", IDENTIFIER_POINTER(DECL_NAME(f->decl)));
 
-        std::unordered_map<gimple*, int> lock_idx; // lock idx
+        std::unordered_map<gimple*, int> lock_calls; // lock calls
         std::unordered_map<tree, int> lock_decl_idx; // declaration linked with a lock
         int num_locks = 0;
         int num_calls = 0;
 
-        std::vector<lock_checker::bb<GccAdapter>> bbs;
+        func<GccAdapter> fun = {};
 
         basic_block bb;
         FOR_ALL_BB_FN(bb, f) {
+
             lock_checker::bb<GccAdapter> cur_bb = {};
 
             gimple_bb_info* bb_info = &bb->il.gimple;
@@ -287,9 +284,10 @@ public:
 
                 if (gimple_code(gs) == GIMPLE_CALL) {
                     auto* stmt = as_a<gcall*>(gs);
-                    if (match_call(stmt, "lock", 2)) {
-                        fprintf(stderr, "\tfound lock! %p\n", stmt);
 
+                    std::optional<idx<lock>> cur_lock_idx = std::nullopt;
+
+                    if (match_call(stmt, "lock", 2) || match_call(stmt, "unlock", 1)) {
                         auto rhs = gimple_call_arg(stmt, 0);
                         auto real_rhs = follow_var_decl(follow_ssa(rhs));
 
@@ -297,36 +295,57 @@ public:
                             auto decl_id = DECL_NAME(real_rhs);
                             if (auto it = lock_decl_idx.find(decl_id); it == lock_decl_idx.end()) {
                                 fprintf(stderr, "\t\tfound new lock for %p, decl_id %d\n", decl_id, num_locks);
-                                lock_idx[stmt] = num_locks;
+
+                                fun.locks.push_back(decl_id);
                                 lock_decl_idx[decl_id] = num_locks;
                                 num_locks++;
-                            } else {
-                                fprintf(stderr, "\t\tfound existing lock %d\n", it->second);
                             }
+
+                            cur_lock_idx = lock_decl_idx[decl_id];
+                        } else {
+                            // shouldn't happen
+                            fprintf(stderr, "\t\tunable to find lock argument, skipping %p\n", stmt);
+                            continue;
                         }
+                    }
 
-                        int cur_lock = lock_idx[stmt];
-
+                    if (match_call(stmt, "lock", 2)) {
                         auto delay = gimple_call_arg(stmt, 1);
-                        auto delay_val = calc_vals(delay, lock_idx);
+                        auto delay_val = calc_vals(delay, lock_calls);
                         if (!delay_val) {
                             // TODO post warning
                             // if we can't convert the delay to a constant you're doing something terribly wrong
+                            fprintf(stderr, "\t\tunable to determine delay argument, skipping %p\n");
+                            continue;
                         } else {
                             auto &[delay_vals, delay_list] = *delay_val;
-                            if (delay_vals.size() > 1) {
-                                // TODO post warning
+                            if ((delay_vals.size() != 1) || delay_vals[0] != 65535) {
+                                if (delay_vals.size() != 1) {
+                                    fprintf(stderr, "\t\tunable to determine the delay for a given lock; assuming it's fallible\n");
+                                }
+                                lock_calls[stmt] = num_calls;
+                                fprintf(stderr, "\t\tfound fallible lock for %d id %d!\n", **cur_lock_idx, num_calls);
+                                cur_bb.actions.push_back(action<GccAdapter>::fallible_lock_(stmt->location, *cur_lock_idx, {num_calls}));
+                                num_calls++;
                             } else {
+                                fprintf(stderr, "\t\tfound lock %d!\n", **cur_lock_idx);
+                                cur_bb.actions.push_back(action<GccAdapter>::lock_(stmt->location, *cur_lock_idx));
                             }
                         }
                     } else if (match_call(stmt, "unlock", 1)) {
-                        auto rhs = gimple_call_arg(stmt, 0);
-                        auto real_rhs = follow_var_decl(follow_ssa(rhs));
-                        if (real_rhs != nullptr) {
-                            auto decl_id = DECL_NAME(real_rhs);
-                            if (auto it = lock_decl_idx.find(decl_id); it != lock_decl_idx.end()) {
-                                fprintf(stderr, "\t\tmatched with lock %d\n", it->second);
-                            }
+                        if (cur_lock_idx.has_value()) {
+                            fprintf(stderr, "\tfound unlock %d! %p\n", **cur_lock_idx, stmt);
+                            cur_bb.actions.push_back(action<GccAdapter>::unlock_(stmt->location, *cur_lock_idx));
+                        } else {
+                            fprintf(stderr, "\t\tw: could not find lock id; bug in plugin!\n");
+                        }
+                    } else {
+                        tree decl = call_decl(stmt);
+                        if (decl != NULL) {
+                            cur_bb.actions.push_back(action<GccAdapter>::call_(stmt->location, decl));
+                            fprintf(stderr, "\t\tfound call to %s\n", IDENTIFIER_POINTER(decl));
+                        } else {
+                            fprintf(stderr, "\t\tunable to find function for call; this is a bug in the plugin\n");
                         }
                     }
                 }
@@ -336,8 +355,8 @@ public:
 
                     tree lhs = gimple_cond_lhs(stmt);
                     tree rhs = gimple_cond_rhs(stmt);
-                    auto maybe_lhs = calc_vals(lhs, lock_idx);
-                    auto maybe_rhs = calc_vals(rhs, lock_idx);
+                    auto maybe_lhs = calc_vals(lhs, lock_calls);
+                    auto maybe_rhs = calc_vals(rhs, lock_calls);
 
                     auto code = gimple_cond_code(stmt);
                     if (code == EQ_EXPR) {
@@ -372,6 +391,7 @@ public:
                 fprintf(stderr, "-> %d %04x\n", dest->index, e->flags);
             }
 
+            fun.bbs.push_back(std::move(cur_bb));
         }
         return 0;
     }
