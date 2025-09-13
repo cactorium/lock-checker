@@ -556,4 +556,143 @@ TEST(test_file_checker, test_missing_take) {
     ASSERT_NE(line_errors.size(), 0);
 }
 
+
+TEST(test_file_checker, test_multiple_funcs) {
+    using a = action<BasicAdapter>;
+    using ix = idx<lock>;
+
+    auto foo = lock_checker::func<BasicAdapter> {
+        // foo() {
+        //      lock(portMAX_DELAY); // 1
+        //      bar();
+        //      unlock();
+        // }
+        .locks = { 0 },
+        .bbs = {
+            { // 0
+                .actions = {},
+                .loc = 0,
+                .next = {
+                    {1},
+                }
+            },
+            { // 1
+                .actions = {
+                    a::lock_(0, ix{0}),
+                    a::call_(1, "bar"),
+                    a::unlock_(2, ix{0}),
+                },
+                .loc=0,
+                .next = {
+                    {2}
+                }
+            },
+            { // 2
+            },
+        },
+        .start_bb = {0},
+        .end_bb = {2},
+    };
+    auto bar = lock_checker::func<BasicAdapter> {
+        // bar() {
+        //      baz();
+        // }
+        .locks = { 0 },
+        .bbs = {
+            { // 0
+                .actions = {},
+                .loc = 3,
+                .next = {
+                    {1},
+                }
+            },
+            { // 1
+                .actions = {
+                    a::call_(3, "baz"),
+                },
+                .loc=0,
+                .next = {
+                    {2}
+                }
+            },
+            { // 2
+            },
+        },
+        .start_bb = {0},
+        .end_bb = {2},
+    };
+    auto baz = lock_checker::func<BasicAdapter> {
+        // baz() {
+        //      lock();
+        //      unlock();
+        // }
+        .locks = { 0 },
+        .bbs = {
+            { // 0
+                .actions = {},
+                .loc = 4,
+                .next = {
+                    {1},
+                }
+            },
+            { // 1
+                .actions = {
+                    a::lock_(4, ix{0}),
+                    a::unlock_(5, ix{0}),
+                },
+                .loc=4,
+                .next = {
+                    {2}
+                }
+            },
+            { // 2
+            },
+        },
+        .start_bb = {0},
+        .end_bb = {2},
+    };
+
+
+    {
+        file_checker<BasicAdapter> fc;
+        std::unordered_map<int, errors> line_errors;
+
+        fc.process_function("foo", foo, line_errors);
+        ASSERT_EQ(line_errors.size(), 0);
+        fc.process_function("bar", bar, line_errors);
+        ASSERT_EQ(line_errors.size(), 0);
+        fc.process_function("baz", baz, line_errors);
+        ASSERT_NE(line_errors.size(), 0);
+    }
+
+    // test out different orders
+    {
+        file_checker<BasicAdapter> fc;
+        std::unordered_map<int, errors> line_errors;
+
+        fc.process_function("baz", baz, line_errors);
+        ASSERT_EQ(line_errors.size(), 0);
+        fc.process_function("foo", foo, line_errors);
+        ASSERT_EQ(line_errors.size(), 0);
+        fc.process_function("bar", bar, line_errors);
+        ASSERT_NE(line_errors.size(), 0);
+    }
+
+    {
+        file_checker<BasicAdapter> fc;
+        std::unordered_map<int, errors> line_errors;
+
+        fc.process_function("baz", baz, line_errors);
+        ASSERT_EQ(line_errors.size(), 0);
+        fc.process_function("bar", bar, line_errors);
+        ASSERT_EQ(line_errors.size(), 0);
+        fc.process_function("foo", foo, line_errors);
+        ASSERT_NE(line_errors.size(), 0);
+    }
+
+
+
+}
+
+
 }
