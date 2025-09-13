@@ -95,8 +95,10 @@ TEST(test_file_checker, test_basic) {
     ASSERT_EQ(line_errors.size(), 0);
 }
 
-/*
 TEST(test_file_checker, test_basic_blocking_call) {
+    using a = action<BasicAdapter>;
+    using ix = idx<lock>;
+
     auto foo = lock_checker::func<BasicAdapter> {
         // foo() {
         //      lock(portMAX_DELAY); // 1
@@ -109,6 +111,7 @@ TEST(test_file_checker, test_basic_blocking_call) {
         //      lock(portMAX_DELAY); // 4
         //      unlock();
         // }
+        .locks = { 0 },
         .bbs = {
             { // 0
                 .actions = {},
@@ -119,7 +122,7 @@ TEST(test_file_checker, test_basic_blocking_call) {
             },
             { // 1
                 .actions = {
-                    {kLock, 1},
+                    a::lock_(0, ix{0}),
                 },
                 .loc=0,
                 .next = {
@@ -128,7 +131,7 @@ TEST(test_file_checker, test_basic_blocking_call) {
             },
             { // 2
                 .actions = {
-                    {kUnlock, 2},
+                    a::unlock_(2, ix{0}),
                 },
                 .loc=1,
                 .next = {
@@ -137,8 +140,8 @@ TEST(test_file_checker, test_basic_blocking_call) {
             },
             { // 3
                 .actions = {
-                    {kCall, 3, std::nullopt, std::string("f")},
-                    {kUnlock, 4},
+                    a::call_(3, std::string("f")),
+                    a::unlock_(4, ix{0}),
                 },
                 .loc=3,
                 .next = {
@@ -147,8 +150,8 @@ TEST(test_file_checker, test_basic_blocking_call) {
             },
             { // 4
                 .actions = {
-                    {kLock, 5},
-                    {kUnlock, 6},
+                    a::lock_(5, ix{0}),
+                    a::unlock_(6, ix{0}),
                 },
                 .loc=5,
                 .next = {
@@ -167,6 +170,7 @@ TEST(test_file_checker, test_basic_blocking_call) {
     //      unlock();
     // }
     auto f = lock_checker::func<BasicAdapter> {
+        .locks = { 0 },
         .bbs = {
             { // 0
                 .actions = {},
@@ -177,8 +181,8 @@ TEST(test_file_checker, test_basic_blocking_call) {
             },
             { // 1
                 .actions = {
-                    {kLock, 1},
-                    {kUnlock, 1},
+                    a::lock_(1, ix{0}),
+                    a::unlock_(1, ix{0}),
                 },
                 .loc=0,
                 .next = {
@@ -203,6 +207,9 @@ TEST(test_file_checker, test_basic_blocking_call) {
 }
 
 TEST(test_file_checker, test_basic_blocking_call2) {
+    using a = action<BasicAdapter>;
+    using ix = idx<lock>;
+
     auto foo = lock_checker::func<BasicAdapter> {
         // foo() {
         //      lock(portMAX_DELAY); // 1
@@ -215,6 +222,7 @@ TEST(test_file_checker, test_basic_blocking_call2) {
         //      lock(portMAX_DELAY); // 4
         //      unlock();
         // }
+        .locks = { 0 },
         .bbs = {
             { // 0
                 .actions = {},
@@ -225,7 +233,7 @@ TEST(test_file_checker, test_basic_blocking_call2) {
             },
             { // 1
                 .actions = {
-                    {kLock, 1},
+                    a::lock_(0, ix{0}),
                 },
                 .loc=0,
                 .next = {
@@ -234,7 +242,7 @@ TEST(test_file_checker, test_basic_blocking_call2) {
             },
             { // 2
                 .actions = {
-                    {kUnlock, 2},
+                    a::unlock_(2, ix{0}),
                 },
                 .loc=1,
                 .next = {
@@ -243,8 +251,8 @@ TEST(test_file_checker, test_basic_blocking_call2) {
             },
             { // 3
                 .actions = {
-                    {kCall, 3, std::nullopt, std::string("f")},
-                    {kUnlock, 4},
+                    a::call_(3, std::string("f")),
+                    a::unlock_(4, ix{0}),
                 },
                 .loc=3,
                 .next = {
@@ -253,8 +261,8 @@ TEST(test_file_checker, test_basic_blocking_call2) {
             },
             { // 4
                 .actions = {
-                    {kLock, 5},
-                    {kUnlock, 6},
+                    a::lock_(5, ix{0}),
+                    a::unlock_(6, ix{0}),
                 },
                 .loc=5,
                 .next = {
@@ -273,6 +281,7 @@ TEST(test_file_checker, test_basic_blocking_call2) {
     //      unlock();
     // }
     auto f = lock_checker::func<BasicAdapter> {
+        .locks = { 0 },
         .bbs = {
             { // 0
                 .actions = {},
@@ -283,8 +292,8 @@ TEST(test_file_checker, test_basic_blocking_call2) {
             },
             { // 1
                 .actions = {
-                    {kLock, 1},
-                    {kUnlock, 1},
+                    a::lock_(1, ix{0}),
+                    a::unlock_(1, ix{0}),
                 },
                 .loc=0,
                 .next = {
@@ -311,6 +320,9 @@ TEST(test_file_checker, test_basic_blocking_call2) {
 
 
 TEST(test_file_checker, test_missing_give) {
+    using a = action<BasicAdapter>;
+    using ix = idx<lock>;
+
     auto foo = lock_checker::func<BasicAdapter> {
         // foo() {
         //      lock(portMAX_DELAY); // 1
@@ -318,11 +330,12 @@ TEST(test_file_checker, test_missing_give) {
         //          unlock(a); // 2
         //      } else {
         //          f(); // 3
-        //          //unlock(a); // missing unlock here
+        //          unlock(a);
         //      }
         //      lock(portMAX_DELAY); // 4
         //      unlock();
         // }
+        .locks = { 0 },
         .bbs = {
             { // 0
                 .actions = {},
@@ -333,7 +346,7 @@ TEST(test_file_checker, test_missing_give) {
             },
             { // 1
                 .actions = {
-                    {kLock, 1},
+                    a::lock_(0, ix{0}),
                 },
                 .loc=0,
                 .next = {
@@ -342,7 +355,7 @@ TEST(test_file_checker, test_missing_give) {
             },
             { // 2
                 .actions = {
-                    {kUnlock, 2},
+                    a::unlock_(2, ix{0}),
                 },
                 .loc=1,
                 .next = {
@@ -351,8 +364,8 @@ TEST(test_file_checker, test_missing_give) {
             },
             { // 3
                 .actions = {
-                    {kCall, 3, std::nullopt, std::string("f")},
-                    //{kUnlock, 4},
+                    a::call_(3, std::string("f")),
+                    //a::unlock_(4, ix{0}),
                 },
                 .loc=3,
                 .next = {
@@ -361,8 +374,8 @@ TEST(test_file_checker, test_missing_give) {
             },
             { // 4
                 .actions = {
-                    {kLock, 5},
-                    {kUnlock, 6},
+                    a::lock_(5, ix{0}),
+                    a::unlock_(6, ix{0}),
                 },
                 .loc=5,
                 .next = {
@@ -386,6 +399,9 @@ TEST(test_file_checker, test_missing_give) {
 }
 
 TEST(test_file_checker, test_missing_give_return) {
+    using a = action<BasicAdapter>;
+    using ix = idx<lock>;
+
     auto foo = lock_checker::func<BasicAdapter> {
         // foo() {
         //      lock(portMAX_DELAY); // 1
@@ -393,11 +409,12 @@ TEST(test_file_checker, test_missing_give_return) {
         //          unlock(a); // 2
         //      } else {
         //          f(); // 3
-        //          unlock(a); // missing unlock here
+        //          unlock(a);
         //      }
         //      lock(portMAX_DELAY); // 4
         //      //unlock();
         // }
+        .locks = { 0 },
         .bbs = {
             { // 0
                 .actions = {},
@@ -408,7 +425,7 @@ TEST(test_file_checker, test_missing_give_return) {
             },
             { // 1
                 .actions = {
-                    {kLock, 1},
+                    a::lock_(0, ix{0}),
                 },
                 .loc=0,
                 .next = {
@@ -417,7 +434,7 @@ TEST(test_file_checker, test_missing_give_return) {
             },
             { // 2
                 .actions = {
-                    {kUnlock, 2},
+                    a::unlock_(2, ix{0}),
                 },
                 .loc=1,
                 .next = {
@@ -426,8 +443,8 @@ TEST(test_file_checker, test_missing_give_return) {
             },
             { // 3
                 .actions = {
-                    {kCall, 3, std::nullopt, std::string("f")},
-                    //{kUnlock, 4},
+                    a::call_(3, std::string("f")),
+                    a::unlock_(4, ix{0}),
                 },
                 .loc=3,
                 .next = {
@@ -436,8 +453,8 @@ TEST(test_file_checker, test_missing_give_return) {
             },
             { // 4
                 .actions = {
-                    {kLock, 5},
-                    //{kUnlock, 6},
+                    a::lock_(5, ix{0}),
+                    //a::unlock_(6, ix{0}),
                 },
                 .loc=5,
                 .next = {
@@ -462,6 +479,9 @@ TEST(test_file_checker, test_missing_give_return) {
 
 
 TEST(test_file_checker, test_missing_take) {
+    using a = action<BasicAdapter>;
+    using ix = idx<lock>;
+
     auto foo = lock_checker::func<BasicAdapter> {
         // foo() {
         //      //lock(portMAX_DELAY); // 1
@@ -469,11 +489,12 @@ TEST(test_file_checker, test_missing_take) {
         //          unlock(a); // 2
         //      } else {
         //          f(); // 3
-        //          unlock(a); // missing unlock here
+        //          unlock(a);
         //      }
         //      lock(portMAX_DELAY); // 4
-        //      //unlock();
+        //      unlock();
         // }
+        .locks = { 0 },
         .bbs = {
             { // 0
                 .actions = {},
@@ -484,7 +505,7 @@ TEST(test_file_checker, test_missing_take) {
             },
             { // 1
                 .actions = {
-                    //{kLock, 1},
+                    //a::lock_(0, ix{0}),
                 },
                 .loc=0,
                 .next = {
@@ -493,7 +514,7 @@ TEST(test_file_checker, test_missing_take) {
             },
             { // 2
                 .actions = {
-                    {kUnlock, 2},
+                    a::unlock_(2, ix{0}),
                 },
                 .loc=1,
                 .next = {
@@ -502,8 +523,8 @@ TEST(test_file_checker, test_missing_take) {
             },
             { // 3
                 .actions = {
-                    {kCall, 3, std::nullopt, std::string("f")},
-                    //{kUnlock, 4},
+                    a::call_(3, std::string("f")),
+                    a::unlock_(4, ix{0}),
                 },
                 .loc=3,
                 .next = {
@@ -512,8 +533,8 @@ TEST(test_file_checker, test_missing_take) {
             },
             { // 4
                 .actions = {
-                    {kLock, 5},
-                    //{kUnlock, 6},
+                    a::lock_(5, ix{0}),
+                    //a::unlock_(6, ix{0}),
                 },
                 .loc=5,
                 .next = {
@@ -531,10 +552,8 @@ TEST(test_file_checker, test_missing_take) {
 
     std::unordered_map<int, errors> line_errors;
 
-    // swap the order around
     fc.process_function("foo", std::move(foo), line_errors);
     ASSERT_NE(line_errors.size(), 0);
 }
-*/
 
 }
