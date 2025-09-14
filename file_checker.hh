@@ -92,17 +92,19 @@ template <typename T> struct file_checker {
     }
 
     void check_callers(FuncId callee, std::unordered_map<Location, errors>& line_errors) {
+        fprintf(stderr, "checking %p\n", (void*) callee);
         const auto &called_by_ = called_by;
         if (const auto it = called_by_.find(callee); it != called_by.end()) {
             for (const auto& cs: it->second) {
                 // check this call to see if it causes an error
                 if ((blocking_locks_used[callee] & cs.cur_lock_state) != 0) {
-                    line_errors[cs.loc].add(errors::call_with_blocking_lock(""));
+                    line_errors[cs.loc].add(errors::call_with_blocking_lock("blocking lock used by caller"));
                 }
 
                 // update blocking_locks_used
                 const auto old_locks = blocking_locks_used[cs.caller];
                 blocking_locks_used[cs.caller] = blocking_locks_used[cs.caller] | blocking_locks_used[callee];
+                fprintf(stderr, "new locks used %08x\n", blocking_locks_used[cs.caller].state);
 
                 // if blocking_locks_used is changed, check the functions that called it
                 if (old_locks != blocking_locks_used[cs.caller]) {
@@ -179,6 +181,7 @@ template <typename T> struct file_checker {
         }, 0);
 
         blocking_locks_used[name] = blocking_locks;
+        fprintf(stderr, "blocking locks %08x\n", blocking_locks.state);
 
         check_callers(name, line_errors);
     }

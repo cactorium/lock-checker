@@ -178,6 +178,30 @@ template <typename T> struct func {
         return locks[*idx];
     }
 
+    void dump() const {
+        fprintf(stderr, "func start %d end %d\n", *start_bb, *end_bb);
+        for (const auto& lock: locks) {
+            fprintf(stderr, "\tlock %p\n", (void*) lock);
+        }
+        for (size_t i = 0; i < bbs.size(); i++) {
+            const auto& bb_ = bbs[i];
+            fprintf(stderr, "bb idx %d depends_on %d true %d false %d\n",
+                    i,
+                    (bb_.next.depends_on ? **bb_.next.depends_on : -1),
+                    *bb_.next.on_true,
+                    (bb_.next.on_false ? **bb_.next.on_false : -1));
+            for (const auto &a: bb_.actions) {
+                switch (a.typ) {
+                case kLock: fprintf(stderr, "\tlock id %d\n", **a.lock_id); break;
+                case kFallibleLock: fprintf(stderr, "\tfallible lock id %d call %d\n", **a.lock_id, **a.call_id); break;
+                case kUnlock: fprintf(stderr, "\tunlock id %d\n", **a.lock_id); break;
+                case kCall: fprintf(stderr, "\tcall %p\n", (void*)*a.called_func); break;
+                default: fprintf(stderr, "\tUNKNOWN; this shouldn\'t happen!\n");
+                }
+            }
+        }
+    }
+
     template <typename U, typename F> void explore(F f, U init_val, std::optional<edge_state<T, U>> start_state = std::nullopt) const {
         std::queue<edge_state<T, U>> to_explore;
         std::unordered_set<edge_state<T, U>> visited;

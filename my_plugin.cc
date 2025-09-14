@@ -274,20 +274,19 @@ public:
         fun.bbs.resize(num_bbs);
 
         FOR_ALL_BB_FN(bb, f) {
-
             lock_checker::bb<GccAdapter> cur_bb = {};
 
             edge e;
             edge_iterator ei;
             FOR_EACH_EDGE(e, ei, bb->succs) {
                 basic_block dest = e->dest;
-                fprintf(stderr, "%d -> %d %04x\n", bb->index, dest->index, e->flags);
+                //fprintf(stderr, "%d -> %d %04x\n", bb->index, dest->index, e->flags);
 
                 if (e->flags & EDGE_FALLTHRU || e->flags & EDGE_TRUE_VALUE || e->flags == 0) {
-                    fprintf(stderr, "found true edge\n");
+                    //fprintf(stderr, "found true edge\n");
                     cur_bb.next.on_true = dest->index;
                 } else if (e->flags & EDGE_FALSE_VALUE) {
-                    fprintf(stderr, "found false edge\n");
+                    //fprintf(stderr, "found false edge\n");
                     cur_bb.next.on_false = dest->index;
                 } else {
                     fprintf(stderr, "unknown edge type %04x", e->flags);
@@ -296,17 +295,19 @@ public:
 
 
             gimple_bb_info* bb_info = &bb->il.gimple;
-            fprintf(stderr, "bb start %d\n", bb->index);
+            //fprintf(stderr, "bb start %d\n", bb->index);
             //print_gimple_seq(stderr, bb_info->seq, 0, (dump_flags_t)0);
             gimple_stmt_iterator gsi;
             for (gsi = gsi_start(bb_info->seq); !gsi_end_p(gsi); gsi_next(&gsi)) {
                 gimple* gs = gsi_stmt(gsi);
                 //fprintf(stderr, "\tstmt %p %d code %d\n\t", gs, c, gs->code);
+                /*
                 pretty_printer pp;
                 pp_needs_newline(&pp) = true;
                 pp.set_output_stream(stderr);
                 pp_gimple_stmt_1(&pp, gs, 0, TDF_RAW);
                 pp_newline_and_flush(&pp);
+                */
 
                 if (gimple_code(gs) == GIMPLE_CALL) {
                     auto* stmt = as_a<gcall*>(gs);
@@ -431,14 +432,15 @@ public:
                 }
             }
 
-            fprintf(stderr, "next depends_on %d true %d false %d\n", (cur_bb.next.depends_on ? **cur_bb.next.depends_on:-1), *cur_bb.next.on_true, (cur_bb.next.on_false ? **cur_bb.next.on_false : -1));
+            //fprintf(stderr, "next depends_on %d true %d false %d\n", (cur_bb.next.depends_on ? **cur_bb.next.depends_on:-1), *cur_bb.next.on_true, (cur_bb.next.on_false ? **cur_bb.next.on_false : -1));
             fun.bbs[bb->index] = std::move(cur_bb);
         }
         fun.start_bb = {ENTRY_BLOCK_PTR_FOR_FN(f)->index};
         fun.end_bb = {EXIT_BLOCK_PTR_FOR_FN(f)->index};
         fun.end_line = f->function_end_locus;
 
-        fprintf(stderr, "fun has %d bbs entry %d exit %d\n", (int)fun.bbs.size(), *fun.start_bb, *fun.end_bb);
+        fprintf(stderr, "func %p\n", f->decl);
+        fun.dump();
 
         std::unordered_map<location_t, errors> fun_errors;
         checker.process_function(f->decl, fun, fun_errors);

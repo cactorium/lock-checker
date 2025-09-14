@@ -649,10 +649,131 @@ TEST(test_file_checker, test_multiple_funcs) {
         fc.process_function("foo", foo, line_errors);
         ASSERT_NE(line_errors.size(), 0);
     }
+}
 
 
+// failing case
+
+/*
+   74 | int foo(int v) {
+func start 0 end 1
+bb idx 0 depends_on -1 true 2 false -1
+bb idx 1 depends_on -1 true -1 false -1
+bb idx 2 depends_on -1 true 3 false 4
+        lock id 0
+        call 0x7fe5cffd4840 // bar()
+bb idx 3 depends_on -1 true 5 false -1
+        unlock id 0
+bb idx 4 depends_on -1 true 5 false -1
+        unlock id 0
+bb idx 5 depends_on -1 true 1 false -1
+
+   85 | static void bar() {
+      |             ^~~
+func start 0 end 1
+bb idx 0 depends_on -1 true 2 false -1
+bb idx 1 depends_on -1 true -1 false -1
+bb idx 2 depends_on -1 true 4 false -1
+bb idx 3 depends_on -1 true 4 false -1
+        call 0x7fe5cffd4880 // foobar()
+bb idx 4 depends_on -1 true 3 false 5
+bb idx 5 depends_on -1 true 1 false -1
+
+   92 | static void foobar() {
+func start 0 end 1
+bb idx 0 depends_on -1 true 2 false -1
+bb idx 1 depends_on -1 true -1 false -1
+bb idx 2 depends_on -1 true 3 false 4
+        lock id 0
+bb idx 3 depends_on -1 true 5 false -1
+        unlock id 0
+bb idx 4 depends_on -1 true 5 false -1
+        unlock id 0
+bb idx 5 depends_on -1 true 1 false -1
+*/
+TEST(test_file_checker, test_multiple_funcs_more_complicated) {
+    using a = action<BasicAdapter>;
+    using ix = idx<lock>;
+
+    auto foo = lock_checker::func<BasicAdapter> {
+        .locks = { 0 },
+        .bbs = {
+            { .next = { {2}, } }, // 0
+            { }, // 1
+            {  // 2
+                .actions = {
+                    action<BasicAdapter>::lock_(0, {0}),
+                    action<BasicAdapter>::call_(1, "bar"),
+                },
+                .next = { {3}, {4}, },
+            },
+            { // 3
+                .actions = { action<BasicAdapter>::unlock_(2, {0}) },
+                .next = { {5} }
+            },
+            { // 4
+                .actions = { action<BasicAdapter>::unlock_(2, {0}) },
+                .next = { {5} }
+            },
+            { .next = { {2}, } }, // 5
+        },
+        .start_bb = {0},
+        .end_bb = {1},
+    };
+    auto bar = lock_checker::func<BasicAdapter> {
+        .locks = { },
+        .bbs = {
+            { .next = { {2}, } }, // 0
+            { }, // 1
+            { .next = { {4}, } }, // 2
+            {
+                .actions = { a::call_(3, "foobar"), },
+                .next = { {4}, }
+            }, // 3
+            { .next = { {3}, {5} } }, // 4
+            { .next = { {1}, } }, // 5
+        },
+        .start_bb = {0},
+        .end_bb = {1},
+    };
+    auto baz = lock_checker::func<BasicAdapter> {
+        .locks = { 0 },
+        .bbs = {
+            { .next = { {2}, } }, // 0
+            { }, // 1
+            {  // 2
+                .actions = {
+                    action<BasicAdapter>::lock_(0, {0}),
+                },
+                .next = { {3}, {4}, },
+            },
+            { // 3
+                .actions = { action<BasicAdapter>::unlock_(2, {0}) },
+                .next = { {5} }
+            },
+            { // 4
+                .actions = { action<BasicAdapter>::unlock_(2, {0}) },
+                .next = { {5} }
+            },
+            { .next = { {2}, } }, // 5
+        },
+        .start_bb = {0},
+        .end_bb = {1},
+    };
+
+
+    file_checker<BasicAdapter> fc;
+    std::unordered_map<int, errors> line_errors;
+
+    fc.process_function("foo", foo, line_errors);
+    ASSERT_EQ(line_errors.size(), 0);
+    fc.process_function("bar", bar, line_errors);
+    ASSERT_EQ(line_errors.size(), 0);
+    fc.process_function("foobar", baz, line_errors);
+    ASSERT_NE(line_errors.size(), 0);
 
 }
+
 
 
 }

@@ -5,10 +5,11 @@ int lock(handle h, int delay);
 void unlock(handle h);
 }
 
-#define delay (255)
+#define portMAX_DELAY (65535)
 
 handle tmp;
 
+/*
 void foo(int i) {
     if (lock(tmp, delay) == 1) {
         unlock(tmp);
@@ -64,4 +65,37 @@ int foobar(int i) {
 
     unlock(tmp);
     return j-3;
+}
+*/
+
+static void bar(void);
+static void foobar(void);
+
+int foo(int v) {
+    lock(tmp, portMAX_DELAY);
+    bar();
+    if (v == 7) {
+        unlock(tmp);
+        return 2;
+    }
+    unlock(tmp);
+    return 5;
+}
+
+static void bar() {
+    for (int i = 0; i < 10; i++) {
+        foobar();
+    }
+}
+
+int test = 11;
+static void foobar() {
+    lock(tmp, portMAX_DELAY);
+    if (test == 12) {
+        unlock(tmp);
+        return;
+    }
+
+    test++;
+    unlock(tmp);
 }
