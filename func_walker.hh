@@ -172,6 +172,7 @@ template <typename T> struct func {
     std::vector<typename T::LockId> locks; // need some kind of lock id to map between locks across calls
     std::vector<bb<T>> bbs;
     idx<bb<T>> start_bb, end_bb;
+    typename T::Location end_line; // used to mark if the function failed to give a semaphore
 
     const typename T::LockId& lookup_lock(const idx<lock>& idx) const {
         return locks[*idx];

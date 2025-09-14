@@ -173,7 +173,7 @@ template <typename T> struct file_checker {
             } else if (a.typ == kEnd) {
                 if (es.cur_lock_state != 0) {
                     // lock held at the end of the function
-                    line_errors[a.loc].add(errors::take_without_give(""));
+                    line_errors[fun.end_line].add(errors::take_without_give(""));
                 }
             }
         }, 0);

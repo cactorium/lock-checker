@@ -10,25 +10,27 @@ void unlock(handle h);
 handle tmp;
 
 void foo(int i) {
-    if (lock(tmp, delay) == 0) {
+    if (lock(tmp, delay) == 1) {
+        unlock(tmp);
         return;
     }
 
+    lock(tmp, 65535);
     if (i == 2) {
         unlock(tmp);
         return;
-   } else {
+    } else {
         if (i == 7) {
-            lock(tmp, 3);
+            //unlock(tmp);
         } else {
-            unlock(tmp);
+            //lock(tmp, 65535);
+            //unlock(tmp);
         }
     }
 
     unlock(tmp);
 }
 
-/*
 void bar(void) {
     int i = 7;
     lock(tmp, delay);
@@ -63,5 +65,3 @@ int foobar(int i) {
     unlock(tmp);
     return j-3;
 }
-
-*/

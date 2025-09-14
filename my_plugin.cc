@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <unordered_map>
 
 #include "gcc-plugin.h"
@@ -276,6 +277,24 @@ public:
 
             lock_checker::bb<GccAdapter> cur_bb = {};
 
+            edge e;
+            edge_iterator ei;
+            FOR_EACH_EDGE(e, ei, bb->succs) {
+                basic_block dest = e->dest;
+                fprintf(stderr, "%d -> %d %04x\n", bb->index, dest->index, e->flags);
+
+                if (e->flags & EDGE_FALLTHRU || e->flags & EDGE_TRUE_VALUE || e->flags == 0) {
+                    fprintf(stderr, "found true edge\n");
+                    cur_bb.next.on_true = dest->index;
+                } else if (e->flags & EDGE_FALSE_VALUE) {
+                    fprintf(stderr, "found false edge\n");
+                    cur_bb.next.on_false = dest->index;
+                } else {
+                    fprintf(stderr, "unknown edge type %04x", e->flags);
+                }
+            }
+
+
             gimple_bb_info* bb_info = &bb->il.gimple;
             fprintf(stderr, "bb start %d\n", bb->index);
             //print_gimple_seq(stderr, bb_info->seq, 0, (dump_flags_t)0);
@@ -302,6 +321,7 @@ public:
                             auto decl_id = DECL_NAME(real_rhs);
                             if (auto it = lock_decl_idx.find(decl_id); it == lock_decl_idx.end()) {
                                 fprintf(stderr, "\t\tfound new lock for %p, decl_id %d\n", decl_id, num_locks);
+                                //warning_at(stmt->location, 0, "found new lock for %p, decl_id %d\n", decl_id, num_locks);
 
                                 fun.locks.push_back(decl_id);
                                 lock_decl_idx[decl_id] = num_locks;
@@ -366,30 +386,44 @@ public:
                     auto maybe_rhs = calc_vals(rhs, lock_calls);
 
                     auto code = gimple_cond_code(stmt);
+
+                    auto process_result = [&](possible_vals& result) {
+                        if (result) {
+                            auto &[result_vals, result_list] = *result;
+                            if (result_vals.size() == 2) {
+                                if (result_vals[0] == 1 && result_vals[1] == 0) {
+                                    cur_bb.next.depends_on = {result_list[0]};
+                                    // need to flip the branches
+                                    std::swap(cur_bb.next.on_true, *cur_bb.next.on_false);
+                                } else if (result_vals[0] == 0 && result_vals[1] == 1) {
+                                    cur_bb.next.depends_on = {result_list[0]};
+                                } else {
+                                    fprintf(stderr, "w: constant expression found in cond statement\n");
+                                    // here both results are either 0 or 1, so it's either always
+                                    // true or always false
+                                    // maybe warn? don't need to do anything, it doesn't really depend on 
+                                    // the lock statement
+                                }
+                            } else {
+                                fprintf(stderr, "unknown cond case\n");
+                                fprintf(stderr, "cond vals ");
+                                dump_vals(result_vals);
+                                fprintf(stderr, "\n");
+                            }
+                        } else {
+                            fprintf(stderr, "branch unrelated to locks\n");
+                        }
+                    };
                     if (code == EQ_EXPR) {
                         auto result = merge_vals(maybe_lhs, maybe_rhs, [](int64_t a, int64_t b) -> bool {
                             return a == b;
                         });
-                        if (result) {
-                            auto &[result_vals, result_list] = *result;
-                            fprintf(stderr, "cond vals ");
-                            dump_vals(result_vals);
-                            fprintf(stderr, "\n");
-                        } else {
-                            fprintf(stderr, "branch unrelated to locks\n");
-                        }
+                        process_result(result);
                     } else if (code == NE_EXPR) {
                         auto result = merge_vals(maybe_lhs, maybe_rhs, [](int64_t a, int64_t b) -> bool {
                             return a != b;
                         });
-                        if (result) {
-                            auto &[result_vals, result_list] = *result;
-                            fprintf(stderr, "cond vals ");
-                            dump_vals(result_vals);
-                            fprintf(stderr, "\n");
-                        } else {
-                            fprintf(stderr, "branch unrelated to locks\n");
-                        }
+                        process_result(result);
                     } else {
                         fprintf(stderr, "\t\tUNKNOWN cond code %d\n", code);
                         fprintf(stderr, "branch unrelated to locks\n");
@@ -397,34 +431,37 @@ public:
                 }
             }
 
-            int edge_idx = 0;
-            edge e;
-            edge_iterator ei;
-            FOR_EACH_EDGE(e, ei, bb->succs) {
-                basic_block dest = e->dest;
-                fprintf(stderr, "-> %d %04x\n", dest->index, e->flags);
-
-                if (e->flags & EDGE_FALLTHRU || e->flags & EDGE_TRUE_VALUE || e->flags == 0) {
-                    fprintf(stderr, "found true edge\n");
-                    cur_bb.next.on_true = dest->index;
-                } else if (e->flags & EDGE_FALSE_VALUE) {
-                    fprintf(stderr, "found false edge\n");
-                    cur_bb.next.on_false = dest->index;
-                } else {
-                    fprintf(stderr, "unknown edge type %04x", e->flags);
-                }
-                // TODO flip edges if it's a conditional and it's the inverse of what we're expecting
-            }
-
+            fprintf(stderr, "next depends_on %d true %d false %d\n", (cur_bb.next.depends_on ? **cur_bb.next.depends_on:-1), *cur_bb.next.on_true, (cur_bb.next.on_false ? **cur_bb.next.on_false : -1));
             fun.bbs[bb->index] = std::move(cur_bb);
         }
         fun.start_bb = {ENTRY_BLOCK_PTR_FOR_FN(f)->index};
         fun.end_bb = {EXIT_BLOCK_PTR_FOR_FN(f)->index};
+        fun.end_line = f->function_end_locus;
+
         fprintf(stderr, "fun has %d bbs entry %d exit %d\n", (int)fun.bbs.size(), *fun.start_bb, *fun.end_bb);
 
         std::unordered_map<location_t, errors> fun_errors;
-
         checker.process_function(f->decl, fun, fun_errors);
+
+        fprintf(stderr, "found %d errors\n", fun_errors.size());
+        std::vector<location_t> all_lines;
+        for (auto& [loc, _]: fun_errors) {
+            all_lines.push_back(loc);
+        }
+        std::sort(all_lines.begin(), all_lines.end());
+        for (auto &loc: all_lines) {
+            for (auto &e: fun_errors[loc].errs) {
+                if (e.typ == error::kDoubleTake) {
+                    warning_at(loc, 0, "double take");
+                } else if (e.typ == error::kGiveWithoutTake) {
+                    warning_at(loc, 0, "give without take");
+                } else if (e.typ == error::kTakeWithoutGive) {
+                    warning_at(loc, 0, "mutex not given at end of function");
+                } else if (e.typ == error::kCallWithBlockingLock) {
+                    warning_at(loc, 0, "call to function will block");
+                }
+            }
+        }
 
         return 0;
     }
