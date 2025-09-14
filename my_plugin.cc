@@ -257,7 +257,7 @@ public:
 
     virtual unsigned int execute(function* f) override {
         std::string name = IDENTIFIER_POINTER(DECL_NAME(f->decl));
-        warning(0, "in function %s", name.c_str());
+        fprintf(stderr, "in function %s", name.c_str());
 
         std::unordered_map<gimple*, int> lock_calls; // lock calls
         std::unordered_map<tree, int> lock_decl_idx; // declaration linked with a lock
@@ -440,8 +440,8 @@ public:
         fun.end_bb = {EXIT_BLOCK_PTR_FOR_FN(f)->index};
         fun.end_line = f->function_end_locus;
 
-        fprintf(stderr, "func %s\n", name.c_str());
-        fun.dump();
+        //fprintf(stderr, "func %s\n", name.c_str());
+        //fun.dump();
 
         std::unordered_map<location_t, errors> fun_errors;
         checker.process_function(name, fun, fun_errors);
@@ -455,13 +455,13 @@ public:
         for (auto &loc: all_lines) {
             for (auto &e: fun_errors[loc].errs) {
                 if (e.typ == error::kDoubleTake) {
-                    warning_at(loc, 0, "double take");
+                    error_at(loc, "double take");
                 } else if (e.typ == error::kGiveWithoutTake) {
-                    warning_at(loc, 0, "give without take");
+                    error_at(loc, "give without take");
                 } else if (e.typ == error::kTakeWithoutGive) {
-                    warning_at(loc, 0, "mutex not given at end of function");
-                } else if (e.typ == error::kCallWithBlockingLock) {
-                    warning_at(loc, 0, "call to function will block");
+                    error_at(loc, "mutex not given at end of function");
+                } else if (e.typ = error::kCallWithBlockingLock) {
+                    error_at(loc, "call to function will block");
                 }
             }
         }
