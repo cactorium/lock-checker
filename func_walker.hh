@@ -195,7 +195,7 @@ template <typename T> struct func {
                 case kLock: fprintf(stderr, "\tlock id %d\n", **a.lock_id); break;
                 case kFallibleLock: fprintf(stderr, "\tfallible lock id %d call %d\n", **a.lock_id, **a.call_id); break;
                 case kUnlock: fprintf(stderr, "\tunlock id %d\n", **a.lock_id); break;
-                case kCall: fprintf(stderr, "\tcall %p\n", (void*)*a.called_func); break;
+                case kCall: fprintf(stderr, "\tcall %s\n", a.called_func->c_str()); break;
                 default: fprintf(stderr, "\tUNKNOWN; this shouldn\'t happen!\n");
                 }
             }

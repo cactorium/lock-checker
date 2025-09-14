@@ -92,7 +92,7 @@ template <typename T> struct file_checker {
     }
 
     void check_callers(FuncId callee, std::unordered_map<Location, errors>& line_errors) {
-        fprintf(stderr, "checking %p\n", (void*) callee);
+        fprintf(stderr, "checking %s\n", callee.c_str());
         const auto &called_by_ = called_by;
         if (const auto it = called_by_.find(callee); it != called_by.end()) {
             for (const auto& cs: it->second) {

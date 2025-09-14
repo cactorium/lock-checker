@@ -244,7 +244,7 @@ static bool match_call(gcall* stmt, const char* fname, int nargs) {
 }
 
 struct GccAdapter {
-    using FuncId = tree;
+    using FuncId = std::string;
     using Location = location_t;
     using LockId = tree;
 };
@@ -256,7 +256,8 @@ public:
     file_checker<GccAdapter> checker;
 
     virtual unsigned int execute(function* f) override {
-        warning(0, "in function %s", IDENTIFIER_POINTER(DECL_NAME(f->decl)));
+        std::string name = IDENTIFIER_POINTER(DECL_NAME(f->decl));
+        warning(0, "in function %s", name.c_str());
 
         std::unordered_map<gimple*, int> lock_calls; // lock calls
         std::unordered_map<tree, int> lock_decl_idx; // declaration linked with a lock
@@ -370,7 +371,7 @@ public:
                     } else {
                         tree decl = call_decl(stmt);
                         if (decl != NULL) {
-                            cur_bb.actions.push_back(action<GccAdapter>::call_(stmt->location, decl));
+                            cur_bb.actions.push_back(action<GccAdapter>::call_(stmt->location, IDENTIFIER_POINTER(decl)));
                             fprintf(stderr, "\t\tfound call to %s\n", IDENTIFIER_POINTER(decl));
                         } else {
                             fprintf(stderr, "\t\tunable to find function for call; this is a bug in the plugin\n");
@@ -439,11 +440,11 @@ public:
         fun.end_bb = {EXIT_BLOCK_PTR_FOR_FN(f)->index};
         fun.end_line = f->function_end_locus;
 
-        fprintf(stderr, "func %p\n", f->decl);
+        fprintf(stderr, "func %s\n", name.c_str());
         fun.dump();
 
         std::unordered_map<location_t, errors> fun_errors;
-        checker.process_function(f->decl, fun, fun_errors);
+        checker.process_function(name, fun, fun_errors);
 
         fprintf(stderr, "found %d errors\n", fun_errors.size());
         std::vector<location_t> all_lines;
