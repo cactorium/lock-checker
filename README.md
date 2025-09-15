@@ -1,4 +1,4 @@
-# FreeRTOS lock checker (WIP)
+# FreeRTOS lock checker
 This is a GCC plugin to statically analyze code to avoid deadlocks.
 This can't be solved in the general case but it seems possible if we make some (many) assumptions
 
@@ -39,12 +39,13 @@ The overall idea is to do this:
     - If there are function calls we don't recognize, we save the function name to finish evaluating when that function is analyzed
         - Since we assume no function can change the state of the semaphores, we can continue checking a function without know exactly what a function it calls does
             - We'd just miss deadlocks caused by the called function taking the same semaphore as the calling function, but those'd be caught when that function is analyzed and that part of the function is reanalyzed
+        - Currently we're doing a conservative estimate, in that we don't fully resimulate the function to ensure the lock is taken twice, we only keep track of which semaphores are taken with a blocking call
 
 ## Current progress:
 - [x] Compilable GCC plugin
 - [x] Implement a custom pass
 - [x] Parse the gimple tree to extract function calls, branches, and assignments
-- [ ] Convert the parsed gimple tree into data for each basic block
-- [ ] Analyze each function individually by running through the basic blocks
-- [ ] Extend to cover function calls to other functions defined in the same file
-- [ ] Refine to stage 2
+- [x] Convert the parsed gimple tree into data for each basic block
+- [x] Analyze each function individually by running through the basic blocks
+- [x] Extend to cover function calls to other functions defined in the same file
+- [x] Refine to stage 2
