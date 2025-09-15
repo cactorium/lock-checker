@@ -49,3 +49,4 @@ The overall idea is to do this:
 - [x] Analyze each function individually by running through the basic blocks
 - [x] Extend to cover function calls to other functions defined in the same file
 - [x] Refine to stage 2
+- [ ] Check mutex ordering
