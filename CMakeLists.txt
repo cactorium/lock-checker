@@ -21,7 +21,7 @@ target_compile_options(lock_checker PRIVATE
 )
 
 add_custom_target(check
-    COMMAND ${CMAKE_CXX_COMPILER} -fplugin=$<TARGET_FILE:lock_checker> -c ${CMAKE_SOURCE_DIR}/test.cc -o /dev/null -fdump-tree-gimple
+    COMMAND ${CMAKE_CXX_COMPILER} -fplugin=$<TARGET_FILE:lock_checker> -I${CMAKE_SOURCE_DIR}/mocks -c ${CMAKE_SOURCE_DIR}/test.c -o /dev/null -fdump-tree-gimple
 )
 
 find_package(GTest REQUIRED)

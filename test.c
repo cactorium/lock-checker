@@ -1,24 +1,19 @@
-extern "C" {
-typedef void* handle;
-int lock(handle h, int delay);
-void unlock(handle h);
-}
+#include "FreeRTOS.h"
+#include "semphr.h"
 
-#define portMAX_DELAY (65535)
-
-handle tmp;
+SemaphoreHandle_t tmp;
 
 static void bar(void);
 static void foobar(void);
 
 int foo(int v) {
-    lock(tmp, portMAX_DELAY);
+    xSemaphoreTake(tmp, portMAX_DELAY);
     bar();
     if (v == 7) {
-        unlock(tmp);
+        xSemaphoreGive(tmp);
         return 2;
     }
-    unlock(tmp);
+    xSemaphoreGive(tmp);
     return 5;
 }
 
@@ -30,17 +25,17 @@ static void bar() {
 
 int test = 11;
 static void foobar() {
-    lock(tmp, portMAX_DELAY);
+    xSemaphoreTake(tmp, portMAX_DELAY);
     if (test == 12) {
-        unlock(tmp);
+        xSemaphoreGive(tmp);
         return;
     }
 
     test++;
-    unlock(tmp);
+    xSemaphoreGive(tmp);
 }
 
 void baz(void) {
-    lock(tmp, 6);
-    unlock(tmp);
+    xSemaphoreTake(tmp, 6);
+    xSemaphoreGive(tmp);
 }

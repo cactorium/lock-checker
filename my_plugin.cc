@@ -315,7 +315,7 @@ public:
 
                     std::optional<idx<lock>> cur_lock_idx = std::nullopt;
 
-                    if (match_call(stmt, "lock", 2) || match_call(stmt, "unlock", 1)) {
+                    if (match_call(stmt, "xSemaphoreTake", 2) || match_call(stmt, "xSemaphoreGive", 1)) {
                         auto rhs = gimple_call_arg(stmt, 0);
                         auto real_rhs = follow_var_decl(follow_ssa(rhs));
 
@@ -338,7 +338,7 @@ public:
                         }
                     }
 
-                    if (match_call(stmt, "lock", 2)) {
+                    if (match_call(stmt, "xSemaphoreTake", 2)) {
                         auto delay = gimple_call_arg(stmt, 1);
                         auto delay_val = calc_vals(delay, lock_calls);
                         if (!delay_val) {
@@ -361,7 +361,7 @@ public:
                                 cur_bb.actions.push_back(action<GccAdapter>::lock_(stmt->location, *cur_lock_idx));
                             }
                         }
-                    } else if (match_call(stmt, "unlock", 1)) {
+                    } else if (match_call(stmt, "xSemaphoreGive", 1)) {
                         if (cur_lock_idx.has_value()) {
                             fprintf(stderr, "\tfound unlock %d! %p\n", **cur_lock_idx, stmt);
                             cur_bb.actions.push_back(action<GccAdapter>::unlock_(stmt->location, *cur_lock_idx));
